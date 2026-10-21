@@ -84,7 +84,11 @@ public static class FfmpegReader
         var errors = await errorTask;
 
         if (process.ExitCode != 0 || output.Length < 8)
-            throw new InvalidDataException($"FFmpeg could not decode this file. {errors.Trim()}".Trim());
+        {
+            // FFmpeg's own error output is long and technical; keep only its last line for the log/tooltip.
+            var detail = errors.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+            throw new InvalidDataException(detail == null ? "FFmpeg could not decode this file." : $"FFmpeg could not decode this file ({detail}).");
+        }
 
         var bytes = output.GetBuffer().AsSpan(0, (int)output.Length);
         var frames = bytes.Length / 8;

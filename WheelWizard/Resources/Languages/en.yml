@@ -4,6 +4,7 @@ en:
     settings: "Settings"
     mods: "My Stuff"
     patches: "Patches"
+    custom_music: "Custom Music"
     my_profiles: "My profiles"
     rooms: "Rooms"
     friends: "Friends"
@@ -768,3 +769,91 @@ en:
   mod_library:
     priority: "Load priority"
     reorder: "Drag to reorder"
+
+  custom_music:
+    loading: "Reading your music…"
+    summary: "%{tracks} Retro Rewind tracks · %{total} songs you can replace"
+    summary_game_only: "%{total} songs you can replace"
+    custom_count_tip: "Songs you replaced"
+    search_placeholder: "Search tracks or songs"
+    options: "Music options"
+    discard: "Discard unsaved changes"
+    unsaved: "Unsaved"
+    saved: "Custom music saved. It plays the next time you launch Retro Rewind."
+    file_type: "Audio files"
+    pick_title: "Choose a song for %{name}"
+    converting: "Converting… %{percent}%"
+    pending:
+      one: "1 unsaved change"
+      other: "%{count} unsaved changes"
+    conflicts: "%{mods} also replaces some of this music and has a higher priority on the Patches page, so it wins for %{amount} file(s)."
+    formats_help: "Drop MP3, FLAC, OGG, WAV, AIFF or BRSTM files onto a track. M4A, AAC, Opus and WMA also work if FFmpeg is installed. Files with loop points (LOOPSTART tags or WAV loops) keep them; other songs get a smooth crossfade loop."
+    sort:
+      label: "Sort"
+      default: "Track order"
+      custom_first: "Changed first"
+      alphabetical: "A to Z"
+    final_lap:
+      label: "Final lap music"
+      faster: "Faster (Retro Rewind style)"
+      faster_keep_pitch: "Faster, same pitch"
+      unchanged: "Same as laps 1 and 2"
+      help: "Used for songs you add from now on. If \"Music speed-up\" is on in Retro Rewind's settings, the game speeds up the normal song instead."
+    loudness:
+      label: "Volume matching"
+      help: "Every song is matched (EBU R128 loudness) to the music it replaces, measured from your Retro Rewind files or your own game disc, so nothing is suddenly louder or quieter than the original."
+    reference:
+      retro_rewind: "Retro Rewind's version"
+      game_disc: "your game disc"
+      estimate: "typical game music"
+    details:
+      final_lap: "Final lap: %{file}"
+      source: "Song: %{file}"
+      loudness: "Loudness %{source} LUFS → %{target} LUFS (matched to %{reference})"
+      loop_points: "Uses the loop points stored in the file"
+    category:
+      retro_rewind: "Retro Rewind"
+      retro_rewind_arenas: "Retro Rewind arenas"
+      original_courses: "Original courses"
+      original_arenas: "Original arenas"
+      menus: "Menus"
+      jingles: "Jingles"
+    group:
+      customised:
+        one: "Changed (1)"
+        other: "Changed (%{count})"
+      original: "Original music"
+    notice:
+      disabled: "Custom Music is switched off on the Patches page, so the game plays the original music."
+      enable: "Turn on"
+      no_retro_rewind: "Retro Rewind isn't installed yet, so only the original game's music is listed. Install it from the home page to customize its tracks too."
+      unreadable: "Couldn't read Retro Rewind's track list. Its tracks are missing below; the original game's music still works."
+    menu:
+      choose: "Choose song…"
+      undo: "Undo change"
+      reset: "Back to original music"
+      show_source: "Show song file"
+      more: "More options"
+    empty:
+      title: "No matching music"
+      body: "Try a different search."
+    drop_hint: "Drop onto a track to replace its music. Files named like game music (e.g. n_Circuit32_n.brstm) are matched automatically."
+    drop_on: "Drop to use this song for %{name}"
+    drop_first_only: "Only the first file was used. Drop one song per track."
+    drop_on_row:
+      title: "Which track should this play on?"
+      extra: "Drop the song onto the track you want to replace in the list."
+    matched_files:
+      one: "Matched 1 file by its name"
+      other: "Matched %{count} files by their names"
+    leave:
+      title: "Discard your music changes?"
+      extra: "Songs you added or reset since the last save won't be applied."
+      discard: "Discard"
+      stay: "Keep editing"
+    error:
+      prefix: "Couldn't convert: %{message}"
+      file_missing: "The song file can't be found anymore."
+      cancelled: "Conversion cancelled."
+      unreadable: "This file couldn't be read as audio."
+      unsupported: "%{extension} files aren't supported. Use MP3, FLAC, OGG, WAV, AIFF or BRSTM."

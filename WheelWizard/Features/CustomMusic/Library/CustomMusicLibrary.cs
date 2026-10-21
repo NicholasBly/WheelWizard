@@ -1,0 +1,170 @@
+using System.IO.Abstractions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using WheelWizard.ApplicationData;
+using WheelWizard.CustomMusic.Audio;
+
+namespace WheelWizard.CustomMusic.Library;
+
+public enum MusicSortMode
+{
+    /// <summary>Cup order, the way tracks appear in game.</summary>
+    Default,
+    Alphabetical,
+
+    /// <summary>Customised music first.</summary>
+    CustomFirst,
+}
+
+public enum MusicReferenceSource
+{
+    RetroRewind,
+    GameDisc,
+    Estimate,
+}
+
+/// <summary>A song the player assigned to a music slot, and the converted BRSTM files made from it.</summary>
+public sealed record CustomMusicEntry
+{
+    public required string Key { get; init; }
+
+    /// <summary>Folder (inside the library) holding the converted files and cover art.</summary>
+    public required string StorageId { get; init; }
+
+    public required string SourcePath { get; init; }
+    public string? Title { get; init; }
+    public string? Artist { get; init; }
+    public string? Album { get; init; }
+
+    /// <summary>Cover art file name inside the storage folder, if the song had any.</summary>
+    public string? CoverFile { get; init; }
+
+    public DateTime AddedUtc { get; init; } = DateTime.UtcNow;
+
+    public double SourceLufs { get; init; }
+    public double TargetLufs { get; init; }
+    public double VolumeOffsetDb { get; init; }
+    public MusicReferenceSource ReferenceSource { get; init; }
+    public FinalLapStyle FinalLapStyle { get; init; }
+    public double DurationSeconds { get; init; }
+    public bool UsedSourceLoopPoints { get; init; }
+
+    public string NormalFile { get; init; } = "normal.brstm";
+    public string? FinalLapFile { get; init; }
+
+    [JsonIgnore]
+    public string DisplayTitle => !string.IsNullOrWhiteSpace(Title) ? Title! : System.IO.Path.GetFileNameWithoutExtension(SourcePath);
+}
+
+public sealed record CustomMusicLibraryData
+{
+    public int Version { get; init; } = 1;
+    public MusicSortMode SortMode { get; init; } = MusicSortMode.Default;
+    public FinalLapStyle FinalLapStyle { get; init; } = FinalLapStyle.Faster;
+    public List<CustomMusicEntry> Entries { get; init; } = [];
+}
+
+public interface ICustomMusicLibrary
+{
+    string RootFolderPath { get; }
+
+    CustomMusicLibraryData Load();
+
+    OperationResult Save(CustomMusicLibraryData data);
+
+    /// <summary>A fresh, empty folder for a new conversion.</summary>
+    (string StorageId, string FolderPath) CreateStorage();
+
+    string GetStorageFolder(string storageId);
+
+    /// <summary>Removes converted files that no saved entry (and no pending one) refers to any more.</summary>
+    void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse);
+}
+
+public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataLocation applicationData, ILogger<CustomMusicLibrary> logger)
+    : ICustomMusicLibrary
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public string RootFolderPath => fileSystem.Path.Combine(applicationData.DirectoryPath, "CustomMusic");
+    private string LibraryFilePath => fileSystem.Path.Combine(RootFolderPath, "library.json");
+    private string StorageRootPath => fileSystem.Path.Combine(RootFolderPath, "Converted");
+
+    public CustomMusicLibraryData Load()
+    {
+        try
+        {
+            if (!fileSystem.File.Exists(LibraryFilePath))
+                return new();
+
+            var data = JsonSerializer.Deserialize<CustomMusicLibraryData>(fileSystem.File.ReadAllText(LibraryFilePath), JsonOptions) ?? new();
+            // Drop entries whose converted files went missing; they cannot be installed any more.
+            var valid = data.Entries.Where(entry => fileSystem.File.Exists(fileSystem.Path.Combine(GetStorageFolder(entry.StorageId), entry.NormalFile)));
+            return data with { Entries = valid.ToList() };
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+        {
+            logger.LogError(exception, "Could not read the custom music library; starting with an empty one.");
+            return new();
+        }
+    }
+
+    public OperationResult Save(CustomMusicLibraryData data)
+    {
+        try
+        {
+            fileSystem.Directory.CreateDirectory(RootFolderPath);
+            var temporary = LibraryFilePath + ".tmp";
+            fileSystem.File.WriteAllText(temporary, JsonSerializer.Serialize(data, JsonOptions));
+            fileSystem.File.Move(temporary, LibraryFilePath, overwrite: true);
+            return Ok();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new OperationError { Message = $"Could not save the custom music library: {exception.Message}", Exception = exception };
+        }
+    }
+
+    public (string StorageId, string FolderPath) CreateStorage()
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var folder = GetStorageFolder(id);
+        fileSystem.Directory.CreateDirectory(folder);
+        return (id, folder);
+    }
+
+    public string GetStorageFolder(string storageId)
+    {
+        // Storage ids are our own GUIDs; refuse anything that could escape the library folder.
+        if (storageId.Length == 0 || storageId.Any(c => !char.IsLetterOrDigit(c)))
+            throw new ArgumentException("Invalid storage id.", nameof(storageId));
+        return fileSystem.Path.Combine(StorageRootPath, storageId);
+    }
+
+    public void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse)
+    {
+        if (!fileSystem.Directory.Exists(StorageRootPath))
+            return;
+
+        var keep = new HashSet<string>(storageIdsInUse, StringComparer.OrdinalIgnoreCase);
+        foreach (var folder in fileSystem.Directory.EnumerateDirectories(StorageRootPath))
+        {
+            if (keep.Contains(fileSystem.Path.GetFileName(folder)))
+                continue;
+            try
+            {
+                fileSystem.Directory.Delete(folder, recursive: true);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                logger.LogDebug(exception, "Could not remove unused custom music files in {Folder}.", folder);
+            }
+        }
+    }
+}
