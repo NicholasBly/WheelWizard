@@ -1,0 +1,94 @@
+# Custom Music
+
+The **Custom Music** page (sidebar, under Patches) lists every piece of music Retro Rewind can play. Drop a song on a row
+(or use the row's menu) and it replaces that music. Changes are only written to the game when you press **Save**.
+
+## How music works in Mario Kart Wii and Retro Rewind
+
+| What | Where it comes from |
+| --- | --- |
+| Original course and arena music | `sound/strm/*.brstm` on the disc. One file per course, plus a separate final lap file (`n_Circuit32_n.brstm` and `n_Circuit32_f.brstm`). Capitalisation varies (`n_Kinoko_F`, `STRM_N_KOOPA_N`), and the game wants the exact names. |
+| Menus, results, fanfares, credits | Also BRSTM streams in `sound/strm` (`o_Wi-Fi_waiting32`, `o_FanfareGP1_32`, ...). |
+| Retro Rewind tracks | Pulsar looks for `strm/<file name>_n.brstm` (then `_N`), using the creator file name from `Binaries/Config*.pul`. The final lap uses `_final` or `_F`. Tracks without their own music use the music slot of an original course. |
+| Retro Rewind menus | Pulsar's own `title_bg`, `offline_bg`, `wifi_globe_bg` and `wifi_lobby_bg`. |
+| Sound effects, voices, sequenced jingles | Packed in `revo_kart.brsar`. The BRSAR also keeps a table of the streams, with each one's size and channel count. |
+| "My Stuff" style overrides | Retro Rewind loads loose files from `RetroRewind6/Patches` and matches them by **file name only**, so a `n_Circuit32_n.brstm` in there replaces Luigi Circuit's music. Wheel Wizard copies every enabled patch from the Patches page into that folder when it launches the game. |
+
+**Lap 3 speed-up.** By default Retro Rewind plays the `_f`/`_F` file on the final lap. When a track only has an `_n` file,
+it plays that file 6% faster and higher (pitch ×1.06). Custom Music always writes both files. You choose how the final
+lap version sounds in the page's settings (gear icon):
+
+- **Faster**: like Retro Rewind does it, 6% faster and higher.
+- **Faster, same pitch**: 8% faster tempo with the key unchanged.
+- **Unchanged**: the same file for every lap.
+
+**The BrawlBox "silence halfway through a lap" bug.** The original game trusts the stream size and channel count in
+`revo_kart.brsar`. A replacement BRSTM that is longer, or has fewer channels, than the entry says made the game read past
+the end of the file and stop the music. Retro Rewind's Pulsar engine patches both checks at runtime (`BRSARPatches.cpp`),
+so a loose BRSTM can have any length. Custom Music also writes standard 2-channel, 32 kHz DSP-ADPCM files with
+block-aligned loops, the same layout as Nintendo's files and VGAudio's.
+
+## What happens to a dropped song
+
+1. **Decode.** MP3, WAV, FLAC, OGG, AIFF and BRSTM are decoded by built-in code. M4A/AAC, Opus, WMA and similar formats
+   are decoded too when FFmpeg is installed on the PC; Wheel Wizard never downloads FFmpeg itself.
+2. **Tags.** The title, artist and cover art are read from ID3, Vorbis comments, FLAC pictures and MP4 tags. A
+   `cover.jpg` or `folder.jpg` next to the file also works. Rows with custom music get a coloured background and show
+   the cover.
+3. **Loudness matching.** The music being replaced is measured with ITU-R BS.1770 (integrated LUFS). The measurement
+   includes the volume byte Retro Rewind applies from the BRSTM header (0x3F). The music is read from Retro Rewind's
+   files, or from the game disc image chosen in Wheel Wizard for the original tracks. The new song is then set to the
+   same loudness, with a −1 dBFS peak limiter so loud masters do not clip. If nothing can be measured, the target is
+   −19 LUFS.
+4. **Looping.** Loop points in the file are kept: WAV `smpl` chunks, or `LOOPSTART`/`LOOPLENGTH` tags. Without them the
+   end of the song is crossfaded into the start so the loop has no gap. Jingles such as start fanfares play once.
+5. **Encoding.** The song is resampled to 32 kHz and encoded to DSP-ADPCM BRSTM.
+
+## Saving
+
+Pressing **Save** writes the converted files into a patch called **Custom Music** on the Patches page:
+
+- The patch is created if needed, gets the highest priority so it beats music packs, and is switched back on if it was
+  disabled.
+- Songs that were reset are removed from it, and the patch is deleted when no custom music is left.
+- If another enabled patch with a higher priority provides the same file, the page warns about the conflict.
+
+The library (which song belongs to which row, plus the converted files) is stored in Wheel Wizard's data folder under
+`CustomMusic/`, so nothing is lost when Retro Rewind updates.
+
+## Building a test version
+
+**Option A: let GitHub build it.** Every push to the `music` branch runs the *Custom Music test build* workflow
+(`.github/workflows/music-build.yml`).
+
+1. Open the repository's **Actions** tab and select the latest run.
+2. Download **WheelWizard-music-windows-x64** from the run's *Artifacts* section and unzip it.
+3. Run `WheelWizard.exe`. It is self-contained, so .NET does not need to be installed. If Windows SmartScreen warns
+   about an unknown publisher, choose *More info → Run anyway*.
+
+You can start a build by hand with *Run workflow* on that page.
+
+**Option B: build it on your PC.**
+
+1. Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) and Git.
+2. Get the branch and publish it:
+
+   ```powershell
+   git clone -b music https://github.com/NicholasBly/WheelWizard.git
+   cd WheelWizard
+   dotnet publish WheelWizard/WheelWizard.csproj -r win-x64 -c Release --self-contained true -o publish /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:EnableCompressionInSingleFile=true
+   ```
+
+3. Run `publish\WheelWizard.exe`.
+
+To run straight from source while developing, use `dotnet run --project WheelWizard`. Run the tests with `dotnet test`;
+the custom music tests are in `WheelWizard.Test/Features/CustomMusic`.
+
+## Code map
+
+| Folder | Contents |
+| --- | --- |
+| `Features/CustomMusic/Audio` | Decoders, tag readers, loudness meter, resampler, limiter, DSP-ADPCM encoder, BRSTM reader and writer, `MusicConverter` |
+| `Features/CustomMusic/Catalog` | Original game music list, Pulsar config and BMG reader, Retro Rewind track discovery |
+| `Features/CustomMusic/Library` | Saved songs (`library.json`), reference loudness, game disc reader, the installer that writes the patch |
+| `Features/CustomMusic/ViewModels`, `Views` | The page |
