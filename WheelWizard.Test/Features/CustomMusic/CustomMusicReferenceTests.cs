@@ -9,6 +9,7 @@ using WheelWizard.CustomMusic.Catalog;
 using WheelWizard.CustomMusic.Library;
 using WheelWizard.Settings;
 using WheelWizard.Settings.Types;
+using WheelWizard.Shared;
 
 namespace WheelWizard.Test.Features.CustomMusic;
 
