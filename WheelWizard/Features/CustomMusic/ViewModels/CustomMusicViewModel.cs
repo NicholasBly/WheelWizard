@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO.Abstractions;
 using System.Runtime.CompilerServices;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -46,8 +47,12 @@ public enum VolumeChange
 /// The page calls <see cref="ActivateAsync"/> when it is shown and <see cref="Deactivate"/> when it goes away.
 /// (Not <see cref="IDisposable"/> on purpose: the container would keep every transient disposable alive.)
 /// </summary>
-public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPreviewService preview, IMusicPreviewPlayer player)
-    : INotifyPropertyChanged
+public sealed class CustomMusicViewModel(
+    ICustomMusicService service,
+    IMusicPreviewService preview,
+    IMusicPreviewPlayer player,
+    IFileSystem fileSystem
+) : INotifyPropertyChanged
 {
     /// <summary>A conversion in progress: the song and the volume it is being converted at.</summary>
     private sealed record ConversionRequest(CancellationTokenSource Cancellation, string Path, double VolumeOffsetDb);
@@ -85,6 +90,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
     public IReadOnlyList<SortOption> SortOptions { get; } =
     [
         new(MusicSortMode.Default, t("custom_music.sort.default")),
+        new(MusicSortMode.ByType, t("custom_music.sort.by_type")),
         new(MusicSortMode.CustomFirst, t("custom_music.sort.custom_first")),
         new(MusicSortMode.Alphabetical, t("custom_music.sort.alphabetical")),
     ];
@@ -306,7 +312,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
     {
         if (!AudioFileDecoder.IsSupportedExtension(path))
         {
-            var message = t("custom_music.error.unsupported", new { extension = System.IO.Path.GetExtension(path) });
+            var message = t("custom_music.error.unsupported", new { extension = PathText.Extension(path) });
             item.Error = message;
             return Fail(message);
         }
@@ -370,7 +376,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         var matches = new List<(MusicSlotItem, string)>();
         foreach (var path in paths)
         {
-            var name = System.IO.Path.GetFileName(path);
+            var name = PathText.FileName(path);
             var item = _items.FirstOrDefault(i => i.Slot.FileNames.Any(file => file.Equals(name, StringComparison.OrdinalIgnoreCase)));
             if (item != null && matches.All(match => match.Item1 != item))
                 matches.Add((item, path));
@@ -403,7 +409,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
             return VolumeChange.None;
         }
 
-        if (!File.Exists(path))
+        if (!fileSystem.File.Exists(path))
         {
             var message = t("custom_music.error.file_missing");
             item.Error = message;
@@ -674,6 +680,15 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         }
     }
 
+    /// <summary>The folder holding the song file of <paramref name="item"/>, or null when it is gone.</summary>
+    public string? SourceFolderOf(MusicSlotItem item)
+    {
+        if (item.Current is not { } entry)
+            return null;
+        var folder = fileSystem.Path.GetDirectoryName(entry.SourcePath);
+        return !string.IsNullOrEmpty(folder) && fileSystem.Directory.Exists(folder) ? folder : null;
+    }
+
     private Bitmap? LoadCover(CustomMusicEntry entry)
     {
         var path = service.GetCoverPath(entry);
@@ -681,7 +696,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
             return null;
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = fileSystem.File.OpenRead(path);
             return Bitmap.DecodeToWidth(stream, 96);
         }
         catch (Exception)
@@ -740,6 +755,21 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
 
                 break;
             }
+            case MusicSortMode.ByType:
+            {
+                // Menu and lobby music first: it is a handful of rows that otherwise sit below every race track.
+                var groups = visible
+                    .GroupBy(item => TypeGroup(item.Slot.Category))
+                    .OrderBy(group => group.Key)
+                    .Select(group => (Title: TypeGroupTitle(group.Key), Items: group.OrderBy(item => item.Slot.Order).ToList()));
+                foreach (var (title, items) in groups)
+                {
+                    rows.Add(new MusicGroupHeader(t(title, items.Count), rows.Count == 0));
+                    rows.AddRange(items);
+                }
+
+                break;
+            }
             default:
             {
                 string? lastHeader = null;
@@ -763,6 +793,32 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         Rows.ReplaceAll(rows);
         Notify(nameof(HasNoResults));
     }
+
+    private enum MusicTypeGroup
+    {
+        Menus,
+        Races,
+        Arenas,
+        Jingles,
+    }
+
+    private static MusicTypeGroup TypeGroup(MusicCategory category) =>
+        category switch
+        {
+            MusicCategory.Menu => MusicTypeGroup.Menus,
+            MusicCategory.RetroRewindTrack or MusicCategory.Course => MusicTypeGroup.Races,
+            MusicCategory.RetroRewindArena or MusicCategory.Arena => MusicTypeGroup.Arenas,
+            _ => MusicTypeGroup.Jingles,
+        };
+
+    private static string TypeGroupTitle(MusicTypeGroup group) =>
+        group switch
+        {
+            MusicTypeGroup.Menus => "custom_music.group.menus",
+            MusicTypeGroup.Races => "custom_music.group.races",
+            MusicTypeGroup.Arenas => "custom_music.group.arenas",
+            _ => "custom_music.group.jingles",
+        };
 
     private static string GroupTitle(MusicSlot slot)
     {

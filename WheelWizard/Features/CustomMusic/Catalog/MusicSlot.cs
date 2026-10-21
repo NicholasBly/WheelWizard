@@ -65,6 +65,12 @@ public sealed record MusicSlot
 
     public bool HasFinalLap => FinalLapFileNames.Count > 0;
 
+    /// <summary>
+    /// Retro Rewind's own menu music is played through Koopa Cape's sound with every track of the file at full
+    /// volume, so all tracks are heard at once; everything else is heard through its first track.
+    /// </summary>
+    public bool PlaysAllTracks => Key.StartsWith("menu:", StringComparison.Ordinal);
+
     public IEnumerable<string> AllFileNames => FileNames.Concat(FinalLapFileNames);
 }
 

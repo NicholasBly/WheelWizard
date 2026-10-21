@@ -37,9 +37,9 @@ public sealed record ConversionOptions
 
     /// <summary>
     /// The volume byte (1..127) of the music being replaced, or 0 for none. Retro Rewind reads it from the BRSTM
-    /// header when the music starts and uses it instead of the volume in the sound archive, so a replacement
-    /// carries a byte too. When the song needs more level than its peaks allow, the byte is raised (up to 127)
-    /// instead of limiting the song harder; without a byte the archive's volume applies and nothing is raised.
+    /// header when the music starts and multiplies the sound's volume by byte / 127 (0 means full volume), so a
+    /// replacement carries the same byte. When the song needs more level than its peaks allow, the byte is raised
+    /// (up to 127) instead of limiting the song harder; without a byte the music already plays at full volume.
     /// </summary>
     public byte PulsarVolume { get; init; }
 

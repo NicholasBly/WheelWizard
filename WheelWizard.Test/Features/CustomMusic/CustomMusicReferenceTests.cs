@@ -55,6 +55,22 @@ public class CustomMusicReferenceTests
     }
 
     [Fact]
+    public async Task MultiTrackOriginals_AreMeasuredAsTheGamePlaysThem()
+    {
+        _fs.Directory.CreateDirectory("/rr");
+        var channel = Enumerable.Range(0, 32000 * 2).Select(i => (short)(6000 * Math.Sin(2 * Math.PI * 440 * i / 32000))).ToArray();
+        _fs.File.WriteAllBytes("/rr/double.brstm", BrstmWriter.Write(new BrstmStream { Channels = [channel, channel, channel, channel], Looping = true }));
+        _fs.File.WriteAllBytes("/rr/single.brstm", BrstmWriter.Write(new BrstmStream { Channels = [channel, channel], Looping = true }));
+
+        var single = await _references.GetReferenceAsync(Slot() with { RetroRewindFilePath = "/rr/single.brstm" });
+        var race = await _references.GetReferenceAsync(Slot() with { Key = "rr:double", RetroRewindFilePath = "/rr/double.brstm" });
+        var menu = await _references.GetReferenceAsync(Slot() with { Key = "menu:title_bg", RetroRewindFilePath = "/rr/double.brstm" });
+
+        Assert.Equal(single.Lufs, race.Lufs, 1); // only the first track is heard in a race
+        Assert.InRange(menu.Lufs - single.Lufs, 5.9, 6.1); // menu music plays every track at once
+    }
+
+    [Fact]
     public async Task OriginalOnTheDisc_IsMeasuredAndRemembered()
     {
         _disc.ReadStreamFile(GamePath, "n_Circuit32_n.brstm").Returns(Brstm(amplitude: 4000, volume: 0));

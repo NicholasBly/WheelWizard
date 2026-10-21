@@ -27,10 +27,12 @@ public sealed class PreviewClip
     /// Decodes a BRSTM the way the game plays it, including the volume byte Retro Rewind applies, so previews of the
     /// original and of a replacement are as loud relative to each other as they are in game.
     /// </summary>
-    public static PreviewClip FromBrstm(byte[] brstm)
+    /// <param name="brstm">The BRSTM file.</param>
+    /// <param name="allTracks">Play every track at once (Retro Rewind's menu music) instead of only the first.</param>
+    public static PreviewClip FromBrstm(byte[] brstm, bool allTracks = false)
     {
         var info = BrstmReader.ReadInfo(brstm);
-        return FromAudio(BrstmReader.Decode(brstm), info.PulsarGain);
+        return FromAudio(BrstmReader.DecodeAsPlayed(brstm, allTracks), info.PulsarGain);
     }
 
     public static PreviewClip FromAudio(AudioBuffer audio, double gain = 1.0)

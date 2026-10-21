@@ -792,6 +792,7 @@ en:
       label: "Sort"
       default: "Track order"
       custom_first: "Changed first"
+      by_type: "Menus, races, arenas"
       alphabetical: "A to Z"
     final_lap:
       label: "Final lap music"
@@ -812,6 +813,7 @@ en:
       loudest: "Loudest (+9 dB)"
       at_limit: "%{name} is already as loud as it can get without distorting."
     volume_estimated: "volume estimated"
+    volume_short: "%{amount} dB short (can't get louder)"
     reference:
       retro_rewind: "Retro Rewind's version"
       game_disc: "your game disc"
@@ -826,7 +828,7 @@ en:
     details:
       final_lap: "Final lap: %{file}"
       source: "Song: %{file}"
-      loudness: "Your song %{source} LUFS → %{target} LUFS (matched to %{reference})"
+      loudness: "Original %{original} LUFS (%{reference}) · your song %{source} → %{target} LUFS"
       volume_byte: "Retro Rewind volume %{volume}/127 (original: %{original}/127)"
       volume_limited: "Reached %{amount} compared with the original; any louder would only distort the song"
       loop_points: "Uses the loop points stored in the file"
@@ -844,6 +846,18 @@ en:
         one: "Changed (1)"
         other: "Changed (%{count})"
       original: "Original music"
+      menus:
+        one: "Menus and lobby (1)"
+        other: "Menus and lobby (%{count})"
+      races:
+        one: "Race music (1)"
+        other: "Race music (%{count})"
+      arenas:
+        one: "Battle arenas (1)"
+        other: "Battle arenas (%{count})"
+      jingles:
+        one: "Jingles and fanfares (1)"
+        other: "Jingles and fanfares (%{count})"
     notice:
       disabled: "Custom Music is switched off on the Patches page, so the game plays the original music."
       enable: "Turn on"
@@ -866,6 +880,18 @@ en:
       resume_tip: "Play"
       loading: "Loading…"
       original: "Original music"
+      menus:
+        one: "Menus and lobby (1)"
+        other: "Menus and lobby (%{count})"
+      races:
+        one: "Race music (1)"
+        other: "Race music (%{count})"
+      arenas:
+        one: "Battle arenas (1)"
+        other: "Battle arenas (%{count})"
+      jingles:
+        one: "Jingles and fanfares (1)"
+        other: "Jingles and fanfares (%{count})"
       your_song: "Your song"
       unavailable: "This computer has no audio player Wheel Wizard can use. On Linux, install PulseAudio, PipeWire, ALSA or FFmpeg."
       no_original: "The original music of this entry isn't a file that can be played."

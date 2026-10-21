@@ -187,8 +187,8 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
 
     private static string StripSuffix(string fileName) => fileName.EndsWith("_n.brstm", StringComparison.OrdinalIgnoreCase) ? fileName[..^8] : fileName;
 
-    private static bool IsUsableFileName(string name) =>
-        name.Length is > 0 and <= 48 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) < 0;
+    // The music is written as <name>_n.brstm, so the name must be a valid file name everywhere.
+    private static bool IsUsableFileName(string name) => name.Length <= 48 && PathText.IsValidFileName(name);
 
     /// <summary>Every BRSTM Retro Rewind maps onto /sound/strm, indexed by file name.</summary>
     private Dictionary<string, string> IndexRetroRewindMusic()

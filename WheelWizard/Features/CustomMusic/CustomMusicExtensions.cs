@@ -15,7 +15,7 @@ public static class CustomMusicExtensions
         services.AddSingleton<IMusicReferenceService, MusicReferenceService>();
         services.AddSingleton<ICustomMusicInstaller, CustomMusicInstaller>();
         services.AddSingleton<ICustomMusicService, CustomMusicService>();
-        services.AddSingleton<IAudioOutput>(_ => AudioOutput.Create());
+        services.AddSingleton<IAudioOutput>(provider => AudioOutput.Create(provider.GetRequiredService<System.IO.Abstractions.IFileSystem>()));
         services.AddSingleton<IMusicPreviewPlayer, MusicPreviewPlayer>();
         services.AddSingleton<IMusicPreviewService, MusicPreviewService>();
         services.AddTransient<CustomMusicViewModel>();

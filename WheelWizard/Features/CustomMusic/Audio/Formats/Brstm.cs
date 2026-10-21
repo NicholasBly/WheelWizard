@@ -324,6 +324,94 @@ public static class BrstmReader
         return buffer;
     }
 
+    /// <summary>One track of a BRSTM: its channels (one or two) and its volume byte (127 = full).</summary>
+    public sealed record Track(int[] Channels, byte Volume);
+
+    /// <summary>
+    /// The tracks a BRSTM declares. Custom track music often carries the song in more than one track (copies,
+    /// or alternative versions such as an underwater mix), and the game decides which tracks are heard.
+    /// Files without a usable track table are treated as consecutive stereo pairs.
+    /// </summary>
+    public static IReadOnlyList<Track> ReadTracks(ReadOnlySpan<byte> file)
+    {
+        var info = ReadInfo(file);
+        var tracks = new List<Track>();
+        try
+        {
+            var headOffset = BinaryPrimitives.ReadInt32BigEndian(file[0x10..]);
+            var body = headOffset + 8;
+            var part2 = body + BinaryPrimitives.ReadInt32BigEndian(file[(headOffset + 0x14)..]);
+            int count = file[part2];
+            for (var t = 0; t < count; t++)
+            {
+                var marker = BinaryPrimitives.ReadUInt32BigEndian(file[(part2 + 4 + t * 8)..]);
+                var offset = body + BinaryPrimitives.ReadInt32BigEndian(file[(part2 + 8 + t * 8)..]);
+                // Marker 0x0101xxxx: volume, pan, padding, then the channel list at 0x08. 0x0100xxxx: channel list at 0x00.
+                var extended = ((marker >> 16) & 0xFF) == 1;
+                var volume = extended ? file[offset] : (byte)0x7F;
+                var listOffset = extended ? offset + 8 : offset;
+                int channels = file[listOffset];
+                if (channels is < 1 or > 2)
+                    throw new InvalidDataException("Unexpected channel count in a BRSTM track.");
+                var indices = new int[channels];
+                for (var c = 0; c < channels; c++)
+                {
+                    indices[c] = file[listOffset + 1 + c];
+                    if (indices[c] >= info.ChannelCount)
+                        throw new InvalidDataException("A BRSTM track refers to a missing channel.");
+                }
+
+                tracks.Add(new Track(indices, volume));
+            }
+        }
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentOutOfRangeException or IndexOutOfRangeException)
+        {
+            tracks.Clear();
+        }
+
+        if (tracks.Count == 0)
+        {
+            for (var c = 0; c < info.ChannelCount; c += 2)
+                tracks.Add(new Track(c + 1 < info.ChannelCount ? [c, c + 1] : [c], 0x7F));
+        }
+
+        return tracks;
+    }
+
+    /// <summary>
+    /// Decodes a BRSTM the way it is heard: in races the game plays the first track (further tracks are
+    /// alternatives it switches to, such as Koopa Cape's underwater mix); Retro Rewind's own menu music is played
+    /// with every track at full volume, so the tracks add up (<paramref name="allTracks"/>).
+    /// Each track's volume byte is applied.
+    /// </summary>
+    public static AudioBuffer DecodeAsPlayed(ReadOnlySpan<byte> file, bool allTracks)
+    {
+        var decoded = Decode(file);
+        var tracks = ReadTracks(file);
+        var heard = allTracks ? tracks : tracks.Take(1).ToList();
+        if (heard.Count == 1 && heard[0].Volume >= 0x7F && heard[0].Channels.Length == decoded.ChannelCount)
+            return decoded; // the common single-track file: nothing to mix
+
+        var length = decoded.SampleCount;
+        var stereo = heard.Any(track => track.Channels.Length == 2);
+        var left = new float[length];
+        var right = stereo ? new float[length] : left;
+        foreach (var track in heard)
+        {
+            var gain = Math.Min((int)track.Volume, 0x7F) / 127f;
+            var trackLeft = decoded.Channels[track.Channels[0]];
+            var trackRight = decoded.Channels[track.Channels[^1]];
+            for (var i = 0; i < length; i++)
+            {
+                left[i] += trackLeft[i] * gain;
+                if (stereo)
+                    right[i] += trackRight[i] * gain;
+            }
+        }
+
+        return new AudioBuffer(stereo ? [left, right] : [left], decoded.SampleRate) { Loop = decoded.Loop };
+    }
+
     private static byte[] Deinterleave(ReadOnlySpan<byte> file, Layout layout, int channel, int bytesPerChannel)
     {
         var output = new byte[bytesPerChannel];

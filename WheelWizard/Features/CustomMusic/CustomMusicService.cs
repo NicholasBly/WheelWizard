@@ -95,7 +95,7 @@ public sealed class CustomMusicService(
             progress?.Report(0.02);
             var reference = await references.GetReferenceAsync(slot, cancellationToken);
 
-            var audio = await AudioFileDecoder.DecodeAsync(sourcePath, cancellationToken);
+            var audio = await AudioFileDecoder.DecodeAsync(fileSystem, sourcePath, cancellationToken);
             progress?.Report(0.25);
 
             var options = new ConversionOptions

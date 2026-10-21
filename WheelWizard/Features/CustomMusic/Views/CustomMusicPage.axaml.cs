@@ -136,11 +136,10 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
 
     private void ShowSource_Click(object? sender, RoutedEventArgs e)
     {
-        if (ItemFrom(sender)?.Current is not { } entry)
+        if (ItemFrom(sender) is not { IsCustom: true } item)
             return;
 
-        var folder = Path.GetDirectoryName(entry.SourcePath);
-        if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
+        if (_model.SourceFolderOf(item) is { } folder)
             _filePicker.OpenFolderInFileManager(folder);
         else
             ViewUtils.ShowSnackbar(t("custom_music.error.file_missing"), ViewUtils.SnackbarType.Warning);

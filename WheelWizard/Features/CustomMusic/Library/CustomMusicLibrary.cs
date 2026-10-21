@@ -15,6 +15,9 @@ public enum MusicSortMode
 
     /// <summary>Customised music first.</summary>
     CustomFirst,
+
+    /// <summary>Grouped by where the music plays: menus and lobby, races, battle arenas, then jingles.</summary>
+    ByType,
 }
 
 public enum MusicReferenceSource
@@ -70,7 +73,7 @@ public sealed record CustomMusicEntry
     public string? FinalLapFile { get; init; }
 
     [JsonIgnore]
-    public string DisplayTitle => !string.IsNullOrWhiteSpace(Title) ? Title! : System.IO.Path.GetFileNameWithoutExtension(SourcePath);
+    public string DisplayTitle => !string.IsNullOrWhiteSpace(Title) ? Title! : PathText.FileNameWithoutExtension(SourcePath);
 
     /// <summary>
     /// How much louder (positive) or quieter the song plays in game than the original, in dB, counting the volume
@@ -185,8 +188,7 @@ public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataL
 
     private static bool IsValidStorageId(string? storageId) => !string.IsNullOrEmpty(storageId) && storageId.All(char.IsAsciiLetterOrDigit);
 
-    private static bool IsPlainFileName(string? name) =>
-        !string.IsNullOrWhiteSpace(name) && name.IndexOfAny(['/', '\\', ':']) < 0 && name != "." && name != "..";
+    private static bool IsPlainFileName(string? name) => name != null && PathText.IsValidFileName(name);
 
     public void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse)
     {

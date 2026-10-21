@@ -161,6 +161,9 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                 var text = artist == null ? $"♪ {entry.DisplayTitle}" : $"♪ {entry.DisplayTitle} — {artist}";
                 if (Math.Abs(entry.VolumeOffsetDb) >= 0.05)
                     text = $"{text} · {FormatDb(entry.VolumeOffsetDb)}";
+                // The song's peaks held it below the level asked for: say so on the row, not only in the tooltip.
+                if (entry.LoudnessVersusOriginalDb is { } reached && entry.VolumeOffsetDb - reached > 1.5)
+                    text = $"{text} · {t("custom_music.volume_short", new { amount = (entry.VolumeOffsetDb - reached).ToString("0.#", System.Globalization.CultureInfo.CurrentCulture) })}";
                 // The volume could not be matched to the original, so it is a guess; say so.
                 return entry.ReferenceNote == null ? text : $"{text} · {t("custom_music.volume_estimated")}";
             }
@@ -179,7 +182,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                 lines.Add(t("custom_music.details.final_lap", new { file = Slot.FinalLapFileNames[0] }));
             if (Current is { } entry)
             {
-                lines.Add(t("custom_music.details.source", new { file = System.IO.Path.GetFileName(entry.SourcePath) }));
+                lines.Add(t("custom_music.details.source", new { file = PathText.FileName(entry.SourcePath) }));
                 var reference = entry.ReferenceSource switch
                 {
                     MusicReferenceSource.RetroRewind => t("custom_music.reference.retro_rewind"),
@@ -193,6 +196,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                         {
                             source = entry.SourceLufs.ToString("0.0"),
                             target = (entry.OutputLufs ?? entry.TargetLufs).ToString("0.0"),
+                            original = (entry.ReferenceLufs ?? entry.TargetLufs - entry.VolumeOffsetDb).ToString("0.0"),
                             reference,
                         }
                     )

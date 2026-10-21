@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
+using Testably.Abstractions.Testing;
+using WheelWizard.CustomMusic;
 using WheelWizard.CustomMusic.Audio;
 using WheelWizard.CustomMusic.Audio.Codecs;
 using WheelWizard.CustomMusic.Audio.Dsp;
@@ -72,6 +74,42 @@ public class CustomMusicAudioTests
 
         Assert.Equal(0x40, file[Brstm.PulsarVolumeOffset]);
         Assert.InRange(BrstmReader.ReadInfo(file).PulsarGain, 0.50, 0.51);
+    }
+
+    [Fact]
+    public void Brstm_TracksAreReadFromTheHeader()
+    {
+        var tone = ToPcm16(Tone(32000, 32000, [(440, 0.2)]));
+        var file = BrstmWriter.Write(new BrstmStream { Channels = [tone, tone, tone, tone, tone] });
+
+        var tracks = BrstmReader.ReadTracks(file);
+
+        Assert.Equal(3, tracks.Count);
+        Assert.Equal([0, 1], tracks[0].Channels);
+        Assert.Equal([2, 3], tracks[1].Channels);
+        Assert.Equal([4], tracks[2].Channels);
+        Assert.All(tracks, track => Assert.Equal(0x7F, track.Volume));
+    }
+
+    [Fact]
+    public void Brstm_IsHeardTheWayTheGamePlaysItsTracks()
+    {
+        // Two stereo tracks with the same music, as custom track BRSTMs often have.
+        var song = ToPcm16(Tone(32000 * 3, 32000, [(440, 0.2), (660, 0.1)]));
+        var file = BrstmWriter.Write(new BrstmStream { Channels = [song, song, song, song] });
+
+        var race = BrstmReader.DecodeAsPlayed(file, allTracks: false);
+        var menu = BrstmReader.DecodeAsPlayed(file, allTracks: true);
+        var everyChannel = LoudnessMeter.Measure(BrstmReader.Decode(file)).IntegratedLufs;
+        var firstTrack = LoudnessMeter.Measure(race).IntegratedLufs;
+        var allTracks = LoudnessMeter.Measure(menu).IntegratedLufs;
+
+        Assert.Equal(2, race.ChannelCount);
+        Assert.Equal(2, menu.ChannelCount);
+        // Counting all four channels as separate speakers overstates a race file by 3 dB...
+        Assert.InRange(everyChannel - firstTrack, 2.9, 3.1);
+        // ...and understates menu music, whose identical tracks add up to twice the amplitude (+6 dB).
+        Assert.InRange(allTracks - firstTrack, 5.9, 6.1);
     }
 
     [Fact]
@@ -293,23 +331,37 @@ public class CustomMusicAudioTests
     [Fact]
     public void FolderArt_IsOnlyBorrowedByAlbumTracks()
     {
-        var folder = Directory.CreateTempSubdirectory("wheelwizard-art-").FullName;
-        try
-        {
-            byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5, 6];
-            byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0];
-            File.WriteAllBytes(Path.Combine(folder, "cover.jpg"), jpeg);
-            File.WriteAllBytes(Path.Combine(folder, "My Song.png"), png);
+        var fs = new MockFileSystem(options => options.SimulatingOperatingSystem(SimulationMode.Linux));
+        fs.Directory.CreateDirectory("/music");
+        fs.File.WriteAllBytes("/music/cover.jpg", [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5, 6]);
+        fs.File.WriteAllBytes("/music/My Song.png", [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0]);
 
-            Assert.Null(FolderArtFinder.Find(Path.Combine(folder, "Download.webm"), allowAlbumArt: false));
-            Assert.Equal("image/jpeg", FolderArtFinder.Find(Path.Combine(folder, "Track 01.mp3"), allowAlbumArt: true)?.MimeType);
-            Assert.Equal("image/png", FolderArtFinder.Find(Path.Combine(folder, "My Song.webm"), allowAlbumArt: false)?.MimeType);
-        }
-        finally
-        {
-            Directory.Delete(folder, recursive: true);
-        }
+        Assert.Null(FolderArtFinder.Find(fs, "/music/Download.webm", allowAlbumArt: false));
+        Assert.Equal("image/jpeg", FolderArtFinder.Find(fs, "/music/Track 01.mp3", allowAlbumArt: true)?.MimeType);
+        Assert.Equal("image/png", FolderArtFinder.Find(fs, "/music/My Song.webm", allowAlbumArt: false)?.MimeType);
     }
+
+    [Theory]
+    [InlineData(@"C:\Music\Song.MP3", "Song.MP3", "Song", ".mp3")]
+    [InlineData("/home/me/my.song.flac", "my.song.flac", "my.song", ".flac")]
+    [InlineData("noextension", "noextension", "noextension", "")]
+    [InlineData("/music/.hidden", ".hidden", ".hidden", ".hidden")]
+    public void PathText_SplitsFileNamesOnEveryPlatform(string path, string name, string baseName, string extension)
+    {
+        Assert.Equal(name, PathText.FileName(path));
+        Assert.Equal(baseName, PathText.FileNameWithoutExtension(path));
+        Assert.Equal(extension, PathText.Extension(path));
+    }
+
+    [Theory]
+    [InlineData("rMC1", true)]
+    [InlineData("3DS Toad Circuit", true)]
+    [InlineData("a/b", false)]
+    [InlineData("what?", false)]
+    [InlineData("trailing.", false)]
+    [InlineData("..", false)]
+    [InlineData("", false)]
+    public void PathText_KnowsValidFileNames(string name, bool valid) => Assert.Equal(valid, PathText.IsValidFileName(name));
 
     [Fact]
     public void Converter_RejectsSilence() =>

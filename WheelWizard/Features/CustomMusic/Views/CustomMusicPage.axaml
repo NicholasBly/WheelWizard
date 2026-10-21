@@ -143,6 +143,20 @@
             <Setter Property="Padding" Value="18" />
         </Style>
 
+        <!-- The list's scroll bar sits inside the list (the app default moves it into the page margin, where this
+             page clips it) and uses a thumb that stands out from the dark rows. -->
+        <Style Selector="ListBox#MusicList /template/ ScrollViewer /template/ ScrollBar#PART_VerticalScrollBar">
+            <Setter Property="RenderTransform">
+                <TranslateTransform X="0" />
+            </Setter>
+        </Style>
+        <Style Selector="ListBox#MusicList /template/ ScrollViewer /template/ ScrollBar#PART_VerticalScrollBar /template/ Thumb">
+            <Setter Property="Background" Value="{StaticResource Neutral600}" />
+        </Style>
+        <Style Selector="ListBox#MusicList /template/ ScrollViewer /template/ ScrollBar#PART_VerticalScrollBar /template/ Thumb:pointerover, ListBox#MusicList /template/ ScrollViewer /template/ ScrollBar#PART_VerticalScrollBar /template/ Thumb:pressed">
+            <Setter Property="Background" Value="{StaticResource Neutral400}" />
+        </Style>
+
         <Style Selector="Border.PlayerBar">
             <Setter Property="Background" Value="{StaticResource Neutral900}" />
             <Setter Property="BorderBrush" Value="{StaticResource Brand800}" />
@@ -263,10 +277,12 @@
 
         <!-- The music list -->
         <Grid Grid.Row="3">
-            <ListBox x:Name="MusicList" ItemsSource="{Binding Rows}" Margin="0,8,0,1" Padding="0" Focusable="False">
+            <ListBox x:Name="MusicList" ItemsSource="{Binding Rows}" Margin="0,8,0,1" Padding="0" Focusable="False"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <VirtualizingStackPanel Margin="3,0,3,24" />
+                        <!-- Right margin keeps the rows' buttons clear of the scroll bar. -->
+                        <VirtualizingStackPanel Margin="3,0,16,24" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.DataTemplates>

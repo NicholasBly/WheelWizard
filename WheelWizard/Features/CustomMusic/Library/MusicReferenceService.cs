@@ -51,11 +51,11 @@ public sealed class MusicReferenceService(
 
             if (slot.RetroRewindFilePath is { } shipped && fileSystem.File.Exists(shipped))
             {
-                var key = Identity("rr", shipped, shipped);
+                var key = Identity("rr", shipped, shipped + Tracks(slot));
                 if (cache.TryGetValue(key, out var cached))
                     return From(cached);
 
-                var measured = await Task.Run(() => Measure(fileSystem.File.ReadAllBytes(shipped)), cancellationToken);
+                var measured = await Task.Run(() => Measure(fileSystem.File.ReadAllBytes(shipped), slot.PlaysAllTracks), cancellationToken);
                 if (measured is { } result)
                     return Remember(cache, key, result, MusicReferenceSource.RetroRewind);
                 problem = t("custom_music.reference_problem.unreadable_file", new { file = fileSystem.Path.GetFileName(shipped) });
@@ -70,7 +70,7 @@ public sealed class MusicReferenceService(
                 }
                 else
                 {
-                    var key = Identity("disc", gamePath, gameFile);
+                    var key = Identity("disc", gamePath, gameFile + Tracks(slot));
                     if (cache.TryGetValue(key, out var cached))
                         return From(cached);
 
@@ -80,7 +80,7 @@ public sealed class MusicReferenceService(
                         logger.LogWarning("Could not read {File} from the game disc: {Message}", gameFile, bytes.Error.Message);
                         problem ??= bytes.Error.Message;
                     }
-                    else if (Measure(bytes.Value) is { } result)
+                    else if (Measure(bytes.Value, slot.PlaysAllTracks) is { } result)
                     {
                         return Remember(cache, key, result, MusicReferenceSource.GameDisc);
                     }
@@ -105,28 +105,32 @@ public sealed class MusicReferenceService(
     /// </summary>
     private static double EstimateFrom(Dictionary<string, CachedReference> cache)
     {
-        // Entries from before the "v2|" key prefix folded the volume byte into the number; ignore them.
+        // Entries from older versions measured differently (the volume byte folded in, every track counted); ignore them.
         var measured = cache
-            .Where(pair => pair.Key.StartsWith("v2|", StringComparison.Ordinal) && pair.Value.Source != MusicReferenceSource.Estimate)
+            .Where(pair => pair.Key.StartsWith("v3|", StringComparison.Ordinal) && pair.Value.Source != MusicReferenceSource.Estimate)
             .Select(pair => pair.Value.Lufs)
             .Order()
             .ToList();
         return measured.Count >= 3 ? measured[measured.Count / 2] : MusicLoudness.DefaultTargetLufs;
     }
 
+    /// <summary>The same file measures differently depending on which of its tracks are heard, so that is part of the key.</summary>
+    private static string Tracks(MusicSlot slot) => slot.PlaysAllTracks ? "|all-tracks" : "|first-track";
+
     private static MusicReference From(CachedReference cached) => new(cached.Lufs, cached.Loops, cached.Source, cached.PulsarVolume);
 
-    private (double Lufs, bool Loops, byte PulsarVolume)? Measure(byte[] brstm)
+    private (double Lufs, bool Loops, byte PulsarVolume)? Measure(byte[] brstm, bool allTracks)
     {
         try
         {
             var info = BrstmReader.ReadInfo(brstm);
-            var audio = BrstmReader.Decode(brstm);
+            // Measure what is heard: a file can carry extra tracks the game keeps silent (or plays on top).
+            var audio = BrstmReader.DecodeAsPlayed(brstm, allTracks);
             var loudness = LoudnessMeter.Measure(audio);
             if (loudness.IsSilent)
                 return null;
-            // The file's own loudness. Pulsar scales the stream by header byte 0x3F while it plays; instead of
-            // folding that into the number, replacements get the same byte (see MusicReference).
+            // The file's own loudness. Pulsar multiplies the sound's volume by header byte 0x3F / 127 while it
+            // plays; instead of folding that into the number, replacements get the same byte (see MusicReference).
             return (loudness.IntegratedLufs, info.Looping, info.PulsarVolume);
         }
         catch (Exception exception) when (exception is InvalidDataException or IndexOutOfRangeException or ArgumentException)
@@ -179,6 +183,6 @@ public sealed class MusicReferenceService(
     private string Identity(string kind, string containerPath, string item)
     {
         var info = fileSystem.FileInfo.New(containerPath);
-        return $"v2|{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
+        return $"v3|{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
     }
 }

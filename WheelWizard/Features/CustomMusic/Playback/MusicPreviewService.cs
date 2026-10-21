@@ -47,7 +47,7 @@ public sealed class MusicPreviewService(
         if (slot.RetroRewindFilePath is { } shipped && fileSystem.File.Exists(shipped))
         {
             var info = fileSystem.FileInfo.New(shipped);
-            return Decode($"rr|{shipped}|{info.Length}|{info.LastWriteTimeUtc.Ticks}", () => fileSystem.File.ReadAllBytes(shipped));
+            return Decode($"rr|{shipped}|{info.Length}|{info.LastWriteTimeUtc.Ticks}", () => fileSystem.File.ReadAllBytes(shipped), slot.PlaysAllTracks);
         }
 
         if (slot.GameFileName is not { } gameFile)
@@ -64,7 +64,8 @@ public sealed class MusicPreviewService(
             {
                 var bytes = discReader.ReadStreamFile(gamePath, gameFile);
                 return bytes.IsFailure ? throw new InvalidDataException(bytes.Error.Message) : bytes.Value;
-            }
+            },
+            slot.PlaysAllTracks
         );
     }
 
@@ -77,7 +78,7 @@ public sealed class MusicPreviewService(
         return Decode($"custom|{entry.StorageId}|{entry.NormalFile}", () => fileSystem.File.ReadAllBytes(path));
     }
 
-    private OperationResult<PreviewClip> Decode(string key, Func<byte[]> read)
+    private OperationResult<PreviewClip> Decode(string key, Func<byte[]> read, bool allTracks = false)
     {
         lock (_cacheGate)
         {
@@ -93,7 +94,7 @@ public sealed class MusicPreviewService(
 
         try
         {
-            var clip = PreviewClip.FromBrstm(read());
+            var clip = PreviewClip.FromBrstm(read(), allTracks);
             lock (_cacheGate)
             {
                 _cache.Add((key, clip));

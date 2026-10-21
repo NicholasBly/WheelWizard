@@ -46,11 +46,16 @@ block-aligned loops, the same layout as Nintendo's files and VGAudio's.
 3. **Loudness matching.** The music being replaced is measured with ITU-R BS.1770 (integrated LUFS), either from
    Retro Rewind's files or, for the original tracks, from the game disc image chosen in Wheel Wizard. The new song is
    set to the same loudness, with a −1 dBFS peak limiter so loud masters do not clip.
-   Retro Rewind also reads a **volume byte** from the header of every music file (offset 0x3F, 1–127) and uses it
-   *instead of* the volume stored in the sound archive. A replacement gets the original's byte, so both play at the
-   same level. When the song needs more level than its peaks allow (a quiet original with a low byte, or *Louder*),
-   the byte is raised first, up to 127, and only the rest is left to the limiter, so the song keeps its dynamics.
-   If the original has no byte, the archive's volume applies to both and nothing is raised.
+   Retro Rewind also reads a **volume byte** from the header of every music file (offset 0x3F, 1–127) and multiplies
+   the music's volume by byte / 127 (no byte = full volume). A replacement gets the original's byte, so both play at
+   the same level. When the song needs more level than its peaks allow (a quiet original with a low byte, or
+   *Louder*), the byte is raised first, up to 127, and only the rest is left to the limiter, so the song keeps its
+   dynamics. If the original has no byte, it already plays at full volume and nothing can be raised.
+   The original is measured the way the game plays it: in races only the file's first track is heard (further tracks
+   are alternatives such as Koopa Cape's underwater mix), while Retro Rewind plays its own menu music with every
+   track at full volume, so those tracks add up. Everything else in the game's volume chain (the sound archive's
+   volume for that music, the background music player, the per-track volumes the game sets) applies to the
+   original and the replacement alike.
    When the original cannot be measured (no game disc set, unreadable disc image), the target is −16 LUFS, a typical
    level for game music. The row then says "volume estimated", and its tooltip says why.
    *Louder* / *Quieter* (±2 dB) in the row menu convert the song again; clicks made during a conversion add up. The

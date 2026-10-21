@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace WheelWizard.CustomMusic.Audio.Formats;
@@ -11,28 +12,31 @@ public static class FfmpegReader
 {
     private const int OutputSampleRate = 48000;
 
-    public static string? FindExecutable()
+    /// <summary>FFmpeg next to Wheel Wizard, on PATH, or (on macOS) in Homebrew's folders.</summary>
+    public static string? FindExecutable(IFileSystem fileSystem)
     {
         var name = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
-        var candidates = new List<string> { Path.Combine(AppContext.BaseDirectory, name) };
+        var candidates = new List<string> { fileSystem.Path.Combine(AppContext.BaseDirectory, name) };
 
         var pathVariable = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         candidates.AddRange(
-            pathVariable.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Select(directory => Path.Combine(directory.Trim('"'), name))
+            pathVariable
+                .Split(fileSystem.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select(directory => fileSystem.Path.Combine(directory.Trim('"'), name))
         );
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             candidates.AddRange(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]);
 
-        return candidates.FirstOrDefault(File.Exists);
+        return candidates.FirstOrDefault(fileSystem.File.Exists);
     }
 
-    public static bool IsAvailable => FindExecutable() != null;
+    public static bool IsAvailable(IFileSystem fileSystem) => FindExecutable(fileSystem) != null;
 
-    public static async Task<AudioBuffer> ReadAsync(string path, CancellationToken cancellationToken = default)
+    public static async Task<AudioBuffer> ReadAsync(IFileSystem fileSystem, string path, CancellationToken cancellationToken = default)
     {
         var executable =
-            FindExecutable() ?? throw new NotSupportedException("This audio format needs FFmpeg. Install FFmpeg, or convert the song to MP3, FLAC, OGG or WAV.");
+            FindExecutable(fileSystem) ?? throw new NotSupportedException("This audio format needs FFmpeg. Install FFmpeg, or convert the song to MP3, FLAC, OGG or WAV.");
 
         string[] arguments = ["-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "2", "-ar", OutputSampleRate.ToString(), "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"];
         var (exitCode, output, errors) = await RunAsync(executable, arguments, cancellationToken);
@@ -60,10 +64,10 @@ public static class FfmpegReader
     /// Title, artist, album and embedded cover art of a file only FFmpeg understands (Opus, WebM, WMA, ...).
     /// Never throws: missing FFmpeg or unreadable tags just give empty metadata.
     /// </summary>
-    public static async Task<AudioMetadata> ReadMetadataAsync(string path, CancellationToken cancellationToken = default)
+    public static async Task<AudioMetadata> ReadMetadataAsync(IFileSystem fileSystem, string path, CancellationToken cancellationToken = default)
     {
         var metadata = new AudioMetadata();
-        if (FindExecutable() is not { } executable)
+        if (FindExecutable(fileSystem) is not { } executable)
             return metadata;
 
         try

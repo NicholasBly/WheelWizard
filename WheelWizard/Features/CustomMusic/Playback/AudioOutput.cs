@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace WheelWizard.CustomMusic.Playback;
@@ -17,20 +18,20 @@ public interface IAudioOutput : IDisposable
 
 public static class AudioOutput
 {
-    public static IAudioOutput Create() =>
-        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? new WindowsAudioOutput() : new ProcessAudioOutput();
+    public static IAudioOutput Create(IFileSystem fileSystem) =>
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? new WindowsAudioOutput() : new ProcessAudioOutput(fileSystem);
 
     /// <summary>Finds an executable on PATH (and the usual extra folders on macOS).</summary>
-    internal static string? FindExecutable(string name)
+    internal static string? FindExecutable(IFileSystem fileSystem, string name)
     {
         var fileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? name + ".exe" : name;
         var candidates = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(directory => Path.Combine(directory.Trim('"'), fileName))
+            .Split(fileSystem.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => fileSystem.Path.Combine(directory.Trim('"'), fileName))
             .ToList();
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             candidates.AddRange(["/usr/bin/" + fileName, "/opt/homebrew/bin/" + fileName, "/usr/local/bin/" + fileName]);
-        return candidates.FirstOrDefault(File.Exists);
+        return candidates.FirstOrDefault(fileSystem.File.Exists);
     }
 }
 
@@ -96,7 +97,7 @@ internal sealed class WindowsAudioOutput : IAudioOutput
 }
 
 /// <summary>macOS and Linux: hands a temporary WAV file to the system's command line player.</summary>
-internal sealed class ProcessAudioOutput : IAudioOutput
+internal sealed class ProcessAudioOutput(IFileSystem fileSystem) : IAudioOutput
 {
     private static readonly (string Name, string[] Arguments)[] Players =
     [
@@ -110,7 +111,7 @@ internal sealed class ProcessAudioOutput : IAudioOutput
     ];
 
     private readonly object _gate = new();
-    private readonly Lazy<(string Path, string[] Arguments)?> _player = new(FindPlayer);
+    private readonly Lazy<(string Path, string[] Arguments)?> _player = new(() => FindPlayer(fileSystem));
     private Process? _process;
     private string? _file;
 
@@ -122,8 +123,8 @@ internal sealed class ProcessAudioOutput : IAudioOutput
         lock (_gate)
         {
             Stop();
-            var file = Path.Combine(Path.GetTempPath(), $"wheelwizard-preview-{Guid.NewGuid():N}.wav");
-            File.WriteAllBytes(file, wav);
+            var file = fileSystem.Path.Combine(fileSystem.Path.GetTempPath(), $"wheelwizard-preview-{Guid.NewGuid():N}.wav");
+            fileSystem.File.WriteAllBytes(file, wav);
 
             var startInfo = new ProcessStartInfo
             {
@@ -182,22 +183,22 @@ internal sealed class ProcessAudioOutput : IAudioOutput
         }
     }
 
-    private static (string Path, string[] Arguments)? FindPlayer()
+    private static (string Path, string[] Arguments)? FindPlayer(IFileSystem fileSystem)
     {
         foreach (var (name, arguments) in Players)
         {
-            if (AudioOutput.FindExecutable(name) is { } path)
+            if (AudioOutput.FindExecutable(fileSystem, name) is { } path)
                 return (path, arguments);
         }
 
         return null;
     }
 
-    private static void DeleteQuietly(string file)
+    private void DeleteQuietly(string file)
     {
         try
         {
-            File.Delete(file);
+            fileSystem.File.Delete(file);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
