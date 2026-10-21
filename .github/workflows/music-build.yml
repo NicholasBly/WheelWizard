@@ -55,4 +55,15 @@ jobs:
 
       # Runs after the upload so a failing test elsewhere never blocks getting the exe to try out.
       - name: Run tests
-        run: dotnet test WheelWizard.sln --configuration Release --no-build --verbosity normal
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test WheelWizard.sln --configuration Release --no-build --verbosity normal 2>&1 | tee test.log
+
+      # Failing tests show up as annotations on the run, so there is no need to open the full log.
+      - name: Report failing tests
+        if: failure()
+        shell: bash
+        run: |
+          message=$(grep -E -A8 "^\s+Failed " test.log | head -120 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+          echo "::error title=Failing tests::${message}"
