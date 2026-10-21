@@ -14,9 +14,15 @@ The **Custom Music** page (sidebar, under Patches) lists every piece of music Re
 | Sound effects, voices, sequenced jingles | Packed in `revo_kart.brsar`. The BRSAR also keeps a table of the streams, with each one's size and channel count. |
 | "My Stuff" style overrides | Retro Rewind loads loose files from `RetroRewind6/Patches` and matches them by **file name only**, so a `n_Circuit32_n.brstm` in there replaces Luigi Circuit's music. Wheel Wizard copies every enabled patch from the Patches page into that folder when it launches the game. |
 
-**Lap 3 speed-up.** By default Retro Rewind plays the `_f`/`_F` file on the final lap. When a track only has an `_n` file,
-it plays that file 6% faster and higher (pitch ×1.06). Custom Music always writes both files. You choose how the final
-lap version sounds in the page's settings (gear icon):
+**Lap 3 speed-up.** Retro Rewind's *Music speedup* setting (in its sound settings) chooses between two behaviours:
+
+- **Off** (the default): on the final lap the game switches to the final lap file (`_f`/`_F`, or `_final` for Retro
+  Rewind tracks). If a Retro Rewind track only has an `_n` file, that file plays 6% faster and higher (pitch ×1.06).
+- **On**: the game keeps playing the normal file and raises its pitch by about 6% over the first seconds of the final
+  lap. The final lap file is not used.
+
+Galaxy Colosseum always uses the speed-up. Custom Music writes both files, so either setting works. You choose how the
+final lap file sounds in the page's settings (gear icon):
 
 - **Faster**: like Retro Rewind does it, 6% faster and higher.
 - **Faster, same pitch**: 8% faster tempo with the key unchanged.
