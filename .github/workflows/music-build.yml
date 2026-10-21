@@ -97,5 +97,8 @@ jobs:
         if: failure()
         run: |
           [ -f test.log ] || exit 0
-          message=$(grep -E -A8 "^\s+Failed " test.log | head -400 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+          # Failed tests with their messages; if there are none (a crashed test host, a build error), the end of the log.
+          details=$(grep -E -A8 "^\s+Failed " test.log | head -400 || true)
+          [ -n "$details" ] || details=$(grep -v "^\s*$" test.log | tail -60)
+          message=$(printf '%s' "$details" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
           echo "::error title=Failing tests::${message}"

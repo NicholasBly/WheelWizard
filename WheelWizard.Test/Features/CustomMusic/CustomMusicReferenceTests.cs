@@ -108,7 +108,7 @@ public class CustomMusicReferenceTests
     }
 
     [Fact]
-    public void SeveralTracksWithTheSameName_AreToldApartByFileName()
+    public async Task SeveralTracksWithTheSameName_AreToldApartByFileName()
     {
         var config = new PulsarConfigBuilder()
             .Cup("3DS Cup")
@@ -128,11 +128,11 @@ public class CustomMusicReferenceTests
         paths.RetroRewindFolderPath.Returns("/wheelwizard/RetroRewind6");
         paths.XmlFilePath.Returns("/wheelwizard/riivolution/RetroRewind6.xml");
 
-        var catalog = new MusicCatalogService(_fs, paths, NullLogger<MusicCatalogService>.Instance).LoadAsync().GetAwaiter().GetResult();
+        var catalog = await new MusicCatalogService(_fs, paths, NullLogger<MusicCatalogService>.Instance).LoadAsync();
 
         var names = catalog.Slots.Where(slot => slot.Category == MusicCategory.RetroRewindTrack).Select(slot => slot.Name).ToList();
         Assert.Equal(["3DS (dsA)", "3DS (dsB)", "3DS (dsC)", "Unique Track"], names.Take(4).ToList());
-        Assert.All(catalog.Slots.Where(slot => slot.Category == MusicCategory.RetroRewindTrack).Take(4), slot => Assert.True(slot.Detail!.Contains(" · ")));
+        Assert.All(catalog.Slots.Where(slot => slot.Category == MusicCategory.RetroRewindTrack).Take(4), slot => Assert.Contains(" · ", slot.Detail));
     }
 
     private static MusicSlot Slot() =>
