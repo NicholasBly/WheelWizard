@@ -17,7 +17,7 @@ public class CustomMusicReferenceTests
 {
     private const string GamePath = "/game.iso";
 
-    private readonly MockFileSystem _fs = new();
+    private readonly MockFileSystem _fs = new(options => options.SimulatingOperatingSystem(SimulationMode.Linux));
     private readonly IGameDiscMusicReader _disc = Substitute.For<IGameDiscMusicReader>();
     private readonly CustomMusicLibrary _library;
     private readonly MusicReferenceService _references;

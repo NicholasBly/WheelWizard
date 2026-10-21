@@ -65,5 +65,5 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          message=$(grep -E -A8 "^\s+Failed " test.log | head -120 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+          message=$(grep -E -A8 "^\s+Failed " test.log | head -400 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
           echo "::error title=Failing tests::${message}"
