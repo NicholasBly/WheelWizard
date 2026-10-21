@@ -36,9 +36,10 @@ public sealed record ConversionOptions
     public double VolumeOffsetDb { get; init; }
 
     /// <summary>
-    /// The volume byte (1..127) to store in the BRSTM header, or 0 for none. Retro Rewind reads it when the music
-    /// starts and uses it instead of the volume in the sound archive, so a replacement must carry the same byte
-    /// as the music it replaces to play at the same level.
+    /// The volume byte (1..127) of the music being replaced, or 0 for none. Retro Rewind reads it from the BRSTM
+    /// header when the music starts and uses it instead of the volume in the sound archive, so a replacement
+    /// carries a byte too. When the song needs more level than its peaks allow, the byte is raised (up to 127)
+    /// instead of limiting the song harder; without a byte the archive's volume applies and nothing is raised.
     /// </summary>
     public byte PulsarVolume { get; init; }
 
@@ -48,6 +49,10 @@ public sealed record ConversionOptions
     public double MaxDurationSeconds { get; init; } = 15 * 60;
 }
 
+/// <param name="SourceLufs">Loudness of the song as it was dropped in.</param>
+/// <param name="TargetLufs">Requested loudness of the converted file (the original's loudness plus the volume adjustment).</param>
+/// <param name="OutputLufs">Loudness of the converted file. Lower than the target when the limiter had to hold the peaks back.</param>
+/// <param name="PulsarVolume">Volume byte written to the BRSTM header (0 = none).</param>
 public sealed record ConversionReport(
     double SourceLufs,
     double TargetLufs,
@@ -56,7 +61,9 @@ public sealed record ConversionReport(
     TimeSpan Duration,
     bool UsedSourceLoopPoints,
     int LoopStartSample,
-    int SampleCount
+    int SampleCount,
+    double OutputLufs,
+    byte PulsarVolume
 );
 
 public sealed record ConversionResult(byte[] Normal, byte[]? FinalLap, ConversionReport Report);
@@ -71,6 +78,18 @@ public static class MusicLoudness
 
     public const double FinalLapPitchSpeed = 1.06;
     public const double FinalLapTempoSpeed = 1.08;
+
+    /// <summary>Highest sample peak a converted file may have, leaving room for DSP-ADPCM's small overshoots.</summary>
+    public const double PeakCeilingDb = -1.0;
+
+    /// <summary>Largest volume byte Retro Rewind accepts; it means "full volume".</summary>
+    public const byte MaxPulsarVolume = 0x7F;
+
+    /// <summary>Loop points shorter than this are treated as broken; the game would repeat a tiny fragment as a buzz.</summary>
+    public const double MinLoopSeconds = 1.0;
+
+    /// <summary>Gain of a volume byte in dB (0 = no byte, which means the sound archive's volume).</summary>
+    public static double VolumeByteDb(byte volume) => volume == 0 ? 0 : 20 * Math.Log10(Math.Min(volume, MaxPulsarVolume) / (double)MaxPulsarVolume);
 }
 
 public static class MusicConverter
@@ -83,8 +102,15 @@ public static class MusicConverter
     )
     {
         progress?.Report(0.05);
+        // Damaged files can decode to NaN or infinity, which would poison every measurement below.
+        AudioOps.ReplaceNonFinite(source);
+
         // Loop points from the file (WAV smpl, LOOPSTART tags, BRSTM) are used as-is; otherwise we build a loop.
-        var hasSourceLoop = options.Loop && source.Loop is { } sourceLoop && sourceLoop.IsValid(source.SampleCount);
+        var hasSourceLoop =
+            options.Loop
+            && source.Loop is { } sourceLoop
+            && sourceLoop.IsValid(source.SampleCount)
+            && sourceLoop.Length >= source.SampleRate * MusicLoudness.MinLoopSeconds;
         if (!hasSourceLoop)
             source.Loop = null;
 
@@ -96,6 +122,8 @@ public static class MusicConverter
         var extended = AudioOps.ExtendPastLoopEnd(trimmed, trimmed.SampleRate / 10);
         var audio = Resampler.Resample(extended, options.SampleRate);
         audio = AudioOps.Truncate(audio, (int)(options.MaxDurationSeconds * options.SampleRate));
+        if (options.Loop && audio.SampleCount < options.SampleRate * MusicLoudness.MinLoopSeconds)
+            throw new InvalidDataException("This song is too short to loop; use a song of at least a second.");
         progress?.Report(0.3);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -106,8 +134,25 @@ public static class MusicConverter
             throw new InvalidDataException("This song is silent, so there is nothing to convert.");
 
         var gainDb = options.TargetLufs - loudness.IntegratedLufs + options.VolumeOffsetDb;
+        var pulsarVolume = Math.Min(options.PulsarVolume, MusicLoudness.MaxPulsarVolume);
+        if (pulsarVolume > 0 && loudness.SamplePeak > 0)
+        {
+            // Peaks that would go over the ceiling are handled by raising the volume byte first (the game then
+            // plays the file louder) and only the rest by the limiter, so the song keeps its dynamics.
+            var excessDb = 20 * Math.Log10(loudness.SamplePeak) + gainDb - MusicLoudness.PeakCeilingDb;
+            if (excessDb > 0)
+            {
+                var raised = (byte)Math.Min(MusicLoudness.MaxPulsarVolume, Math.Floor(pulsarVolume * Math.Pow(10, excessDb / 20)));
+                if (raised > pulsarVolume)
+                {
+                    gainDb -= MusicLoudness.VolumeByteDb(raised) - MusicLoudness.VolumeByteDb(pulsarVolume);
+                    pulsarVolume = raised;
+                }
+            }
+        }
+
         AudioOps.ApplyGain(audio, gainDb);
-        var limiterReduction = PeakLimiter.Apply(audio, ceilingDb: -1.0);
+        var limiterReduction = PeakLimiter.Apply(audio, MusicLoudness.PeakCeilingDb);
         progress?.Report(0.45);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -115,17 +160,18 @@ public static class MusicConverter
         {
             if (audio.Loop == null)
             {
+                var beforeCrossfade = LoudnessMeter.Measure(audio.Channels, audio.SampleRate);
                 audio = AudioOps.CreateCrossfadeLoop(audio, options.CrossfadeSeconds);
-                // An equal-power crossfade can lift very correlated material (a held note) a little; re-check.
+                // An equal-power crossfade can lift very correlated material (a held note) a little. Undo only
+                // that change: comparing with the target instead would re-add whatever the limiter took off.
                 var looped = LoudnessMeter.Measure(audio.Channels, audio.SampleRate, 0, audio.Loop?.End ?? audio.SampleCount);
-                var correction = options.TargetLufs + options.VolumeOffsetDb - looped.IntegratedLufs;
-                if (!looped.IsSilent && Math.Abs(correction) > 0.2)
+                var correction = beforeCrossfade.IntegratedLufs - looped.IntegratedLufs;
+                if (!looped.IsSilent && !beforeCrossfade.IsSilent && Math.Abs(correction) > 0.2)
                 {
                     AudioOps.ApplyGain(audio, correction);
                     gainDb += correction;
+                    limiterReduction = Math.Max(limiterReduction, PeakLimiter.Apply(audio, MusicLoudness.PeakCeilingDb));
                 }
-
-                limiterReduction = Math.Max(limiterReduction, PeakLimiter.Apply(audio, ceilingDb: -1.0));
             }
         }
         else
@@ -149,17 +195,18 @@ public static class MusicConverter
         byte[] normal = [];
         byte[]? finalLap = null;
         Parallel.Invoke(
-            () => normal = Encode(normalBuffer, options.PulsarVolume),
+            () => normal = Encode(normalBuffer, pulsarVolume),
             () =>
             {
                 if (finalBuffer != null)
-                    finalLap = Encode(finalBuffer, options.PulsarVolume);
+                    finalLap = Encode(finalBuffer, pulsarVolume);
             }
         );
         if (options.CreateFinalLap && options.FinalLapStyle == FinalLapStyle.Unchanged)
             finalLap = normal;
         progress?.Report(1.0);
 
+        var output = LoudnessMeter.Measure(normalBuffer.Channels, normalBuffer.SampleRate, 0, normalBuffer.Loop?.End ?? normalBuffer.SampleCount);
         var report = new ConversionReport(
             loudness.IntegratedLufs,
             options.TargetLufs + options.VolumeOffsetDb,
@@ -168,7 +215,9 @@ public static class MusicConverter
             TimeSpan.FromSeconds(normalBuffer.SampleCount / (double)normalBuffer.SampleRate),
             hasSourceLoop,
             normalBuffer.Loop?.Start ?? 0,
-            normalBuffer.SampleCount
+            normalBuffer.SampleCount,
+            output.IntegratedLufs,
+            pulsarVolume
         );
         return new ConversionResult(normal, finalLap, report);
     }
@@ -193,7 +242,7 @@ public static class MusicConverter
                 SampleRate = buffer.SampleRate,
                 Looping = buffer.Loop != null,
                 LoopStart = buffer.Loop?.Start ?? 0,
-                PulsarVolume = pulsarVolume == 0 ? null : Math.Min(pulsarVolume, (byte)0x7F),
+                PulsarVolume = pulsarVolume == 0 ? null : Math.Min(pulsarVolume, MusicLoudness.MaxPulsarVolume),
             }
         );
     }

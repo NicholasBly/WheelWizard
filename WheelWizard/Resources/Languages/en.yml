@@ -810,6 +810,7 @@ en:
       louder: "Louder (+3 dB)"
       much_louder: "Much louder (+6 dB)"
       loudest: "Loudest (+9 dB)"
+      at_limit: "%{name} is already as loud as it can get without distorting."
     volume_estimated: "volume estimated"
     reference:
       retro_rewind: "Retro Rewind's version"
@@ -825,7 +826,9 @@ en:
     details:
       final_lap: "Final lap: %{file}"
       source: "Song: %{file}"
-      loudness: "Loudness %{source} LUFS → %{target} LUFS (matched to %{reference})"
+      loudness: "Your song %{source} LUFS → %{target} LUFS (matched to %{reference})"
+      volume_byte: "Retro Rewind volume %{volume}/127 (original: %{original}/127)"
+      volume_limited: "Reached %{amount} compared with the original; any louder would only distort the song"
       loop_points: "Uses the loop points stored in the file"
       volume_offset: "Volume adjusted by %{amount} dB"
       reference_problem: "Volume not matched: %{message}"
@@ -892,3 +895,4 @@ en:
       cancelled: "Conversion cancelled."
       unreadable: "This file couldn't be read as audio."
       unsupported: "%{extension} files aren't supported. Use MP3, FLAC, OGG, WAV, AIFF or BRSTM."
+      load_failed: "Couldn't load the music list: %{message}"

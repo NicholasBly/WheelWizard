@@ -109,6 +109,25 @@ public static class AudioOps
         return false;
     }
 
+    /// <summary>Replaces NaN and infinite samples (from damaged files) with silence; returns how many were replaced.</summary>
+    public static int ReplaceNonFinite(AudioBuffer buffer)
+    {
+        var replaced = 0;
+        foreach (var channel in buffer.Channels)
+        {
+            for (var i = 0; i < channel.Length; i++)
+            {
+                if (!float.IsFinite(channel[i]))
+                {
+                    channel[i] = 0;
+                    replaced++;
+                }
+            }
+        }
+
+        return replaced;
+    }
+
     public static void ApplyGain(AudioBuffer buffer, double gainDb)
     {
         var gain = (float)Math.Pow(10, gainDb / 20);

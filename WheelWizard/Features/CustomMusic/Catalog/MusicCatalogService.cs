@@ -35,7 +35,9 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
                 state = retroRewindSlots.Count > 0 ? RetroRewindCatalogState.Loaded : RetroRewindCatalogState.Unreadable;
             }
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        // A damaged config can also make the binary readers run off the end of the data.
+        catch (Exception exception)
+            when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or IndexOutOfRangeException)
         {
             logger.LogWarning(exception, "Could not read the Retro Rewind track list for custom music.");
             state = RetroRewindCatalogState.Unreadable;

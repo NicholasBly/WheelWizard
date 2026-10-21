@@ -30,8 +30,13 @@ public static class LoudnessMeter
         var blockSize = (int)Math.Round(sampleRate * 0.4);
         var hop = Math.Max(1, blockSize / 4);
         var hopCount = length / hop;
-        if (blockSize <= 0 || hopCount == 0)
+        if (blockSize <= 0 || length <= 0)
             return new LoudnessResult(double.NegativeInfinity, Peak(channels, start, length));
+
+        // BS.1770 needs at least one 400 ms block. Shorter clips (a quick jingle) get the ungated mean
+        // loudness of the whole clip instead of being reported as silent.
+        if (hopCount < 4)
+            return MeasureShort(channels, sampleRate, start, length);
 
         // Sum of squared K-weighted samples per hop (100 ms) for every channel; blocks are 4 hops.
         var hopEnergy = new double[hopCount];
@@ -101,6 +106,23 @@ public static class LoudnessMeter
         }
 
         return count == 0 ? new LoudnessResult(double.NegativeInfinity, peak) : new LoudnessResult(PowerToLufs(sum / count), peak);
+    }
+
+    private static LoudnessResult MeasureShort(float[][] channels, int sampleRate, int start, int length)
+    {
+        double energy = 0;
+        foreach (var channel in channels)
+        {
+            var filter = KWeighting.Create(sampleRate);
+            for (var i = start; i < start + length; i++)
+            {
+                var y = filter.Process(channel[i]);
+                energy += y * y;
+            }
+        }
+
+        var lufs = PowerToLufs(energy / length);
+        return new LoudnessResult(lufs > AbsoluteGate ? lufs : double.NegativeInfinity, Peak(channels, start, length));
     }
 
     private static double PowerToLufs(double power) => power <= 0 ? double.NegativeInfinity : -0.691 + 10 * Math.Log10(power);

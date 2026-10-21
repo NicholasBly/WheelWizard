@@ -34,7 +34,9 @@ public static class AudioFileDecoder
         var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
         var buffer = await DecodeAsync(bytes, path, cancellationToken);
 
-        buffer.Metadata.Cover ??= FolderArtFinder.Find(path);
+        // Generic folder art (cover.jpg, ...) only belongs to songs that are part of a tagged album; a loose
+        // download in a shared folder would otherwise pick up some other album's cover.
+        buffer.Metadata.Cover ??= FolderArtFinder.Find(path, allowAlbumArt: !string.IsNullOrWhiteSpace(buffer.Metadata.Album));
         return buffer;
     }
 
@@ -59,13 +61,17 @@ public static class AudioFileDecoder
         }
         else if (OggVorbisReader.IsOgg(bytes))
         {
-            // Opus, Ogg FLAC or Speex: no managed decoder, but the tags use the same comment format.
+            // Opus, Ogg FLAC or Speex: no managed decoder; FFmpeg decodes and reads the tags.
             buffer = await FfmpegReader.ReadAsync(pathForFallback, cancellationToken);
+            buffer.Metadata = await FfmpegReader.ReadMetadataAsync(pathForFallback, cancellationToken);
         }
         else if (Mp3Reader.LooksLikeMp3(bytes))
             buffer = await Task.Run(() => Mp3Reader.Read(bytes, cancellationToken), cancellationToken);
         else
+        {
             buffer = await FfmpegReader.ReadAsync(pathForFallback, cancellationToken);
+            buffer.Metadata = await FfmpegReader.ReadMetadataAsync(pathForFallback, cancellationToken);
+        }
 
         if (buffer.Loop == null && buffer.Metadata.ResolveLoopTags(buffer.SampleCount) is { } loop)
             buffer.Loop = loop;
@@ -87,13 +93,18 @@ public static class AudioFileDecoder
     }
 }
 
-/// <summary>Finds album art stored next to the song (cover.jpg, folder.png, ...), like most music players do.</summary>
+/// <summary>
+/// Finds artwork stored next to the song: a picture with the song's own name (song.jpg, as yt-dlp and many
+/// rippers save it), or, for songs from an album, the usual album art names (cover.jpg, folder.png, ...).
+/// </summary>
 public static class FolderArtFinder
 {
     private static readonly string[] Names = ["cover", "folder", "front", "album", "albumart", "albumartsmall", "artwork"];
     private static readonly string[] Extensions = [".jpg", ".jpeg", ".png", ".webp"];
 
-    public static CoverArt? Find(string audioPath)
+    /// <param name="audioPath">The song file.</param>
+    /// <param name="allowAlbumArt">Whether generic album art names may be used (only when the song is tagged with an album).</param>
+    public static CoverArt? Find(string audioPath, bool allowAlbumArt)
     {
         try
         {
@@ -108,10 +119,10 @@ public static class FolderArtFinder
                 .Select(file => (File: file, Name: Path.GetFileNameWithoutExtension(file).ToLowerInvariant()))
                 .ToList();
 
-            // A picture named exactly like the song wins, then the usual album art names.
-            var match =
-                candidates.FirstOrDefault(c => c.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase)).File
-                ?? Names.Select(name => candidates.FirstOrDefault(c => c.Name == name).File).FirstOrDefault(file => file != null);
+            // A picture named exactly like the song wins, then (for album tracks) the usual album art names.
+            var match = candidates.FirstOrDefault(c => c.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase)).File;
+            if (match == null && allowAlbumArt)
+                match = Names.Select(name => candidates.FirstOrDefault(c => c.Name == name).File).FirstOrDefault(file => file != null);
             if (match == null)
                 return null;
 

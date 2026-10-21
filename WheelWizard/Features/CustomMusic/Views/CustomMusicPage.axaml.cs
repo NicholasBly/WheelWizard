@@ -39,13 +39,26 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DragLeaveEvent, OnDragLeave);
         AddHandler(DragDrop.DropEvent, OnDrop);
+    }
 
-        Loaded += async (_, _) => await _model.LoadAsync();
+    protected override async void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        try
+        {
+            await _model.ActivateAsync();
+        }
+        catch (Exception exception)
+        {
+            // async void: an escaping exception would take the whole app down.
+            ViewUtils.ShowSnackbar(t("custom_music.error.load_failed", new { message = exception.Message }), ViewUtils.SnackbarType.Warning);
+        }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        _model.Dispose();
+        EndDrag();
+        _model.Deactivate();
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -187,8 +200,15 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
         if (ItemFrom(sender) is not { } item)
             return;
         var result = await _model.AdjustVolumeAsync(item, deltaDb);
-        if (result.IsFailure && item.Error == null)
-            ViewUtils.ShowSnackbar(result.Error.Message, ViewUtils.SnackbarType.Warning);
+        if (result.IsFailure)
+        {
+            if (item.Error == null)
+                ViewUtils.ShowSnackbar(result.Error.Message, ViewUtils.SnackbarType.Warning);
+        }
+        else if (result.Value == VolumeChange.AtLimit)
+        {
+            ViewUtils.ShowSnackbar(t("custom_music.volume.at_limit", new { name = item.Name }), ViewUtils.SnackbarType.Warning);
+        }
     }
 
     private async Task AssignAsync(MusicSlotItem item, string path)

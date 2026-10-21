@@ -35,6 +35,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     private Bitmap? _cover;
     private bool _isDropTarget;
     private ItemPreviewState _previewState;
+    private double? _targetVolumeOffsetDb;
     private bool _canPreviewOriginal;
 
     public MusicSlot Slot { get; private set; } = slot;
@@ -63,7 +64,14 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     public double Progress
     {
         get => _progress;
-        set => Set(ref _progress, value);
+        set
+        {
+            // Raised many times per conversion: only the properties that show it change.
+            if (_progress.Equals(value))
+                return;
+            _progress = value;
+            Raise(nameof(Progress), nameof(Subtitle));
+        }
     }
 
     public string? Error
@@ -89,14 +97,33 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     public bool IsDropTarget
     {
         get => _isDropTarget;
-        set => Set(ref _isDropTarget, value);
+        set
+        {
+            if (_isDropTarget == value)
+                return;
+            _isDropTarget = value;
+            Raise(nameof(IsDropTarget));
+        }
+    }
+
+    /// <summary>The volume adjustment a running conversion uses (shown while converting), or null.</summary>
+    public double? TargetVolumeOffsetDb
+    {
+        get => _targetVolumeOffsetDb;
+        set => Set(ref _targetVolumeOffsetDb, value);
     }
 
     /// <summary>Whether this row is playing in the preview player (either the original or the custom song).</summary>
     public ItemPreviewState PreviewState
     {
         get => _previewState;
-        set => Set(ref _previewState, value);
+        set
+        {
+            if (_previewState == value)
+                return;
+            _previewState = value;
+            Raise(nameof(PreviewState), nameof(IsPreviewing), nameof(ShowPlayButton));
+        }
     }
 
     /// <summary>Whether the original music of this row is a file that can be previewed.</summary>
@@ -122,13 +149,18 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         get
         {
             if (IsProcessing)
-                return t("custom_music.converting", new { percent = (int)Math.Round(Progress * 100) });
+            {
+                var converting = t("custom_music.converting", new { percent = (int)Math.Round(Progress * 100) });
+                return TargetVolumeOffsetDb is { } target && Math.Abs(target) >= 0.05 ? $"{converting} · {FormatDb(target)}" : converting;
+            }
             if (Error != null)
                 return Error;
             if (Current is { } entry)
             {
                 var artist = string.IsNullOrWhiteSpace(entry.Artist) ? null : entry.Artist;
                 var text = artist == null ? $"♪ {entry.DisplayTitle}" : $"♪ {entry.DisplayTitle} — {artist}";
+                if (Math.Abs(entry.VolumeOffsetDb) >= 0.05)
+                    text = $"{text} · {FormatDb(entry.VolumeOffsetDb)}";
                 // The volume could not be matched to the original, so it is a guess; say so.
                 return entry.ReferenceNote == null ? text : $"{text} · {t("custom_music.volume_estimated")}";
             }
@@ -148,24 +180,32 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
             if (Current is { } entry)
             {
                 lines.Add(t("custom_music.details.source", new { file = System.IO.Path.GetFileName(entry.SourcePath) }));
+                var reference = entry.ReferenceSource switch
+                {
+                    MusicReferenceSource.RetroRewind => t("custom_music.reference.retro_rewind"),
+                    MusicReferenceSource.GameDisc => t("custom_music.reference.game_disc"),
+                    _ => t("custom_music.reference.estimate"),
+                };
                 lines.Add(
                     t(
                         "custom_music.details.loudness",
                         new
                         {
                             source = entry.SourceLufs.ToString("0.0"),
-                            target = entry.TargetLufs.ToString("0.0"),
-                            reference = entry.ReferenceSource switch
-                            {
-                                MusicReferenceSource.RetroRewind => t("custom_music.reference.retro_rewind"),
-                                MusicReferenceSource.GameDisc => t("custom_music.reference.game_disc"),
-                                _ => t("custom_music.reference.estimate"),
-                            },
+                            target = (entry.OutputLufs ?? entry.TargetLufs).ToString("0.0"),
+                            reference,
                         }
                     )
                 );
+                if (entry.PulsarVolume > 0)
+                    lines.Add(t("custom_music.details.volume_byte", new { volume = entry.PulsarVolume, original = entry.ReferenceVolume }));
                 if (Math.Abs(entry.VolumeOffsetDb) >= 0.05)
-                    lines.Add(t("custom_music.details.volume_offset", new { amount = entry.VolumeOffsetDb.ToString("+0.#;-0.#") }));
+                {
+                    lines.Add(t("custom_music.details.volume_offset", new { amount = FormatDb(entry.VolumeOffsetDb) }));
+                    // Louder than the peaks allow is not possible without distortion; show what was reached.
+                    if (entry.LoudnessVersusOriginalDb is { } reached && entry.VolumeOffsetDb - reached > 1.0)
+                        lines.Add(t("custom_music.details.volume_limited", new { amount = FormatDb(reached) }));
+                }
                 if (entry.ReferenceNote != null)
                     lines.Add(t("custom_music.details.reference_problem", new { message = entry.ReferenceNote }));
                 if (entry.UsedSourceLoopPoints)
@@ -177,6 +217,8 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     }
 
     public string SortName => Name;
+
+    private static string FormatDb(double decibels) => decibels.ToString("+0.#;-0.#", System.Globalization.CultureInfo.CurrentCulture) + " dB";
 
     public bool Matches(string query)
     {
@@ -214,6 +256,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         nameof(Error),
         nameof(Cover),
         nameof(IsDropTarget),
+        nameof(TargetVolumeOffsetDb),
         nameof(PreviewState),
         nameof(CanPreviewOriginal),
         nameof(IsPreviewing),
@@ -226,6 +269,15 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         nameof(Subtitle),
         nameof(Details),
     ];
+
+    private void Raise(params string[] properties)
+    {
+        var handler = PropertyChanged;
+        if (handler == null)
+            return;
+        foreach (var property in properties)
+            handler(this, new PropertyChangedEventArgs(property));
+    }
 
     /// <summary>Most properties derive from each other; refreshing them all keeps the bindings simple.</summary>
     private void Changed()

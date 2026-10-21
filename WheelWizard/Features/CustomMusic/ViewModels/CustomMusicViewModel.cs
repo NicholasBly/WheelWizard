@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Avalonia.Media.Imaging;
@@ -31,11 +30,28 @@ public sealed class VolumeOption(double decibels, string label)
     public override string ToString() => label;
 }
 
-/// <summary>State and workflow of the Custom Music page: the slot list, conversions, previews and saving.</summary>
-public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPreviewService preview, IMusicPreviewPlayer player)
-    : INotifyPropertyChanged,
-        IDisposable
+/// <summary>What happened when a song was made louder or quieter.</summary>
+public enum VolumeChange
 {
+    /// <summary>Nothing to adjust (no custom song), or a newer adjustment replaced this one.</summary>
+    None,
+    Changed,
+
+    /// <summary>The song was asked to get louder but its peaks already hold it back; it would only distort.</summary>
+    AtLimit,
+}
+
+/// <summary>
+/// State and workflow of the Custom Music page: the slot list, conversions, previews and saving.
+/// The page calls <see cref="ActivateAsync"/> when it is shown and <see cref="Deactivate"/> when it goes away.
+/// (Not <see cref="IDisposable"/> on purpose: the container would keep every transient disposable alive.)
+/// </summary>
+public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPreviewService preview, IMusicPreviewPlayer player)
+    : INotifyPropertyChanged
+{
+    /// <summary>A conversion in progress: the song and the volume it is being converted at.</summary>
+    private sealed record ConversionRequest(CancellationTokenSource Cancellation, string Path, double VolumeOffsetDb);
+
     /// <summary>One step of the "Louder" / "Quieter" row actions.</summary>
     public const double VolumeStepDb = 2;
 
@@ -44,9 +60,10 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
 
     // Conversions are CPU and memory heavy; a couple at a time keeps the app responsive.
     private readonly SemaphoreSlim _conversionSlots = new(2, 2);
-    private readonly CancellationTokenSource _lifetime = new();
+    private CancellationTokenSource _lifetime = new();
     private readonly List<MusicSlotItem> _items = [];
-    private readonly Dictionary<MusicSlotItem, CancellationTokenSource> _conversions = [];
+    private readonly Dictionary<MusicSlotItem, ConversionRequest> _conversions = [];
+    private bool _loaded;
     private MusicCatalog _catalog = MusicCatalog.Empty;
     private List<CustomMusicEntry> _orphanedEntries = [];
     private string _searchText = string.Empty;
@@ -63,7 +80,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
     private string? _conflictText;
     private bool _preferencesReady;
 
-    public ObservableCollection<object> Rows { get; } = [];
+    public BulkObservableCollection<object> Rows { get; } = [];
 
     public IReadOnlyList<SortOption> SortOptions { get; } =
     [
@@ -191,6 +208,46 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         : _catalog.RetroRewind == RetroRewindCatalogState.Loaded ? t("custom_music.summary", new { tracks = _items.Count(i => i.Slot.Category is MusicCategory.RetroRewindTrack or MusicCategory.RetroRewindArena), total = _items.Count })
         : t("custom_music.summary_game_only", new { total = _items.Count });
 
+    /// <summary>Loads the list the first time the page is shown (and again after <see cref="Deactivate"/>).</summary>
+    public Task ActivateAsync()
+    {
+        if (_loaded)
+            return Task.CompletedTask;
+        _loaded = true;
+        if (_lifetime.IsCancellationRequested)
+        {
+            _lifetime.Dispose();
+            _lifetime = new CancellationTokenSource();
+        }
+
+        return LoadAsync();
+    }
+
+    /// <summary>The page went away: stop the preview and any conversions, and let go of cover images.</summary>
+    public void Deactivate()
+    {
+        _loaded = false;
+        if (_playerHooked)
+            player.Changed -= Player_Changed;
+        _playerHooked = false;
+        _previewRequest++;
+        player.Stop();
+        if (_previewItem != null)
+            _previewItem.PreviewState = ItemPreviewState.None;
+        _previewItem = null;
+
+        _lifetime.Cancel();
+        foreach (var running in _conversions.Values)
+            running.Cancellation.Cancel();
+        _conversions.Clear();
+        foreach (var item in _items)
+        {
+            item.PropertyChanged -= Item_PropertyChanged;
+            item.IsProcessing = false;
+            item.Cover = null;
+        }
+    }
+
     public async Task LoadAsync()
     {
         IsLoading = true;
@@ -206,7 +263,10 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
             _preferencesReady = true;
 
             foreach (var item in _items)
+            {
+                item.PropertyChanged -= Item_PropertyChanged;
                 item.Cover = null;
+            }
             _items.Clear();
             var entries = library.Entries.ToDictionary(entry => entry.Key, StringComparer.OrdinalIgnoreCase);
             foreach (var slot in _catalog.Slots)
@@ -253,7 +313,10 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
 
         CancelConversion(item);
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _conversions[item] = cancellation;
+        var volume = volumeOffsetDb ?? SelectedVolume.Decibels;
+        var request = new ConversionRequest(cancellation, path, volume);
+        _conversions[item] = request;
+        item.TargetVolumeOffsetDb = volume;
         item.Error = null;
         item.Progress = 0;
         item.IsProcessing = true;
@@ -264,7 +327,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
             try
             {
                 var progress = new Progress<double>(value => item.Progress = value);
-                var result = await service.ConvertAsync(item.Slot, path, SelectedFinalLap.Style, volumeOffsetDb ?? SelectedVolume.Decibels, progress, cancellation.Token);
+                var result = await service.ConvertAsync(item.Slot, path, SelectedFinalLap.Style, volume, progress, cancellation.Token);
                 if (cancellation.IsCancellationRequested)
                     return Fail(t("custom_music.error.cancelled"));
                 if (result.IsFailure)
@@ -289,10 +352,11 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         }
         finally
         {
-            if (_conversions.TryGetValue(item, out var current) && ReferenceEquals(current, cancellation))
+            if (_conversions.TryGetValue(item, out var current) && ReferenceEquals(current, request))
             {
                 _conversions.Remove(item);
                 item.IsProcessing = false;
+                item.TargetVolumeOffsetDb = null;
             }
 
             cancellation.Dispose();
@@ -315,21 +379,54 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
         return matches;
     }
 
-    /// <summary>Makes the song of <paramref name="item"/> louder or quieter by converting its source file again.</summary>
-    public async Task<OperationResult> AdjustVolumeAsync(MusicSlotItem item, double deltaDb)
+    /// <summary>
+    /// Makes the song of <paramref name="item"/> louder or quieter by converting its source file again.
+    /// Clicks during a conversion add up: the running conversion restarts with the combined adjustment.
+    /// </summary>
+    public async Task<OperationResult<VolumeChange>> AdjustVolumeAsync(MusicSlotItem item, double deltaDb)
     {
-        if (item.Current is not { } entry || item.IsProcessing)
-            return Ok();
+        // A conversion already running (a new song, or an earlier click) is the one to adjust.
+        string? path;
+        double currentOffset;
+        if (_conversions.TryGetValue(item, out var running))
+        {
+            path = running.Path;
+            currentOffset = running.VolumeOffsetDb;
+        }
+        else if (item.Current is { } entry)
+        {
+            path = entry.SourcePath;
+            currentOffset = entry.VolumeOffsetDb;
+        }
+        else
+        {
+            return VolumeChange.None;
+        }
 
-        if (!File.Exists(entry.SourcePath))
+        if (!File.Exists(path))
         {
             var message = t("custom_music.error.file_missing");
             item.Error = message;
-            return Fail(message);
+            return new OperationError { Message = message };
         }
 
-        var offset = Math.Clamp(entry.VolumeOffsetDb + deltaDb, MinVolumeOffsetDb, MaxVolumeOffsetDb);
-        return await AssignAsync(item, entry.SourcePath, offset);
+        var offset = Math.Clamp(currentOffset + deltaDb, MinVolumeOffsetDb, MaxVolumeOffsetDb);
+        if (Math.Abs(offset - currentOffset) < 0.01)
+            return deltaDb > 0 ? VolumeChange.AtLimit : VolumeChange.None;
+
+        var before = item.Current?.LoudnessVersusOriginalDb;
+        var result = await AssignAsync(item, path, offset);
+        // A newer click restarted the conversion; that call reports the outcome.
+        if (_conversions.ContainsKey(item))
+            return VolumeChange.None;
+        if (result.IsFailure)
+            return result.Error;
+
+        // The peaks may already be at the ceiling; then "louder" only squashes the song.
+        var after = item.Current?.LoudnessVersusOriginalDb;
+        if (deltaDb > 0 && before is { } was && after is { } now && now - was < 0.5)
+            return VolumeChange.AtLimit;
+        return VolumeChange.Changed;
     }
 
     /// <summary>Back to the original game / Retro Rewind music (after saving).</summary>
@@ -571,8 +668,9 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
     {
         if (_conversions.Remove(item, out var running))
         {
-            running.Cancel();
+            running.Cancellation.Cancel();
             item.IsProcessing = false;
+            item.TargetVolumeOffsetDb = null;
         }
     }
 
@@ -595,7 +693,9 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
 
     private void Item_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(MusicSlotItem.Current) or nameof(MusicSlotItem.Saved) or nameof(MusicSlotItem.IsProcessing))
+        // Changes to Current, Saved or IsProcessing refresh every row property at once, Current included;
+        // reacting to that one name avoids recomputing the page state three times per change.
+        if (e.PropertyName == nameof(MusicSlotItem.Current))
             NotifyState();
     }
 
@@ -659,9 +759,8 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
             }
         }
 
-        Rows.Clear();
-        foreach (var row in rows)
-            Rows.Add(row);
+        // One reset instead of hundreds of single adds keeps typing in the search box smooth.
+        Rows.ReplaceAll(rows);
         Notify(nameof(HasNoResults));
     }
 
@@ -712,23 +811,4 @@ public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPrev
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void Notify([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-
-    public void Dispose()
-    {
-        if (_playerHooked)
-            player.Changed -= Player_Changed;
-        _playerHooked = false;
-        _previewRequest++;
-        player.Stop();
-        _previewItem = null;
-        _lifetime.Cancel();
-        foreach (var running in _conversions.Values)
-            running.Cancel();
-        _conversions.Clear();
-        foreach (var item in _items)
-        {
-            item.PropertyChanged -= Item_PropertyChanged;
-            item.Cover = null;
-        }
-    }
 }

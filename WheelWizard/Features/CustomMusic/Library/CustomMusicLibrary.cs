@@ -45,12 +45,21 @@ public sealed record CustomMusicEntry
     public double SourceLufs { get; init; }
     public double TargetLufs { get; init; }
     public double VolumeOffsetDb { get; init; }
+
+    /// <summary>Loudness of the original music file (null for songs converted by older versions).</summary>
+    public double? ReferenceLufs { get; init; }
+
+    /// <summary>Volume byte of the original music file (0 = none).</summary>
+    public byte ReferenceVolume { get; init; }
+
+    /// <summary>Loudness of the converted file (null for songs converted by older versions).</summary>
+    public double? OutputLufs { get; init; }
     public MusicReferenceSource ReferenceSource { get; init; }
 
     /// <summary>Why the original music could not be measured (only set when <see cref="ReferenceSource"/> is an estimate).</summary>
     public string? ReferenceNote { get; init; }
 
-    /// <summary>The volume byte written to the BRSTM header, copied from the music this replaces (0 = none).</summary>
+    /// <summary>The volume byte written to the BRSTM header (0 = none). It starts at the original's byte and can be higher.</summary>
     public byte PulsarVolume { get; init; }
 
     public FinalLapStyle FinalLapStyle { get; init; }
@@ -62,6 +71,16 @@ public sealed record CustomMusicEntry
 
     [JsonIgnore]
     public string DisplayTitle => !string.IsNullOrWhiteSpace(Title) ? Title! : System.IO.Path.GetFileNameWithoutExtension(SourcePath);
+
+    /// <summary>
+    /// How much louder (positive) or quieter the song plays in game than the original, in dB, counting the volume
+    /// bytes of both. Null when this was converted by an older version that did not record it.
+    /// </summary>
+    [JsonIgnore]
+    public double? LoudnessVersusOriginalDb =>
+        OutputLufs is { } output && ReferenceLufs is { } reference && double.IsFinite(output) && double.IsFinite(reference)
+            ? output + MusicLoudness.VolumeByteDb(PulsarVolume) - (reference + MusicLoudness.VolumeByteDb(ReferenceVolume))
+            : null;
 }
 
 public sealed record CustomMusicLibraryData
@@ -115,8 +134,14 @@ public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataL
                 return new();
 
             var data = JsonSerializer.Deserialize<CustomMusicLibraryData>(fileSystem.File.ReadAllText(LibraryFilePath), JsonOptions) ?? new();
-            // Drop entries whose converted files went missing; they cannot be installed any more.
-            var valid = data.Entries.Where(entry => fileSystem.File.Exists(fileSystem.Path.Combine(GetStorageFolder(entry.StorageId), entry.NormalFile)));
+            // Drop entries that were edited into something unsafe, or whose converted files went missing.
+            var valid = data.Entries.Where(entry =>
+                IsValidStorageId(entry.StorageId)
+                && IsPlainFileName(entry.NormalFile)
+                && (entry.FinalLapFile == null || IsPlainFileName(entry.FinalLapFile))
+                && (entry.CoverFile == null || IsPlainFileName(entry.CoverFile))
+                && fileSystem.File.Exists(fileSystem.Path.Combine(GetStorageFolder(entry.StorageId), entry.NormalFile))
+            );
             return data with { Entries = valid.ToList() };
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
@@ -153,10 +178,15 @@ public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataL
     public string GetStorageFolder(string storageId)
     {
         // Storage ids are our own GUIDs; refuse anything that could escape the library folder.
-        if (storageId.Length == 0 || storageId.Any(c => !char.IsLetterOrDigit(c)))
+        if (!IsValidStorageId(storageId))
             throw new ArgumentException("Invalid storage id.", nameof(storageId));
         return fileSystem.Path.Combine(StorageRootPath, storageId);
     }
+
+    private static bool IsValidStorageId(string? storageId) => !string.IsNullOrEmpty(storageId) && storageId.All(char.IsAsciiLetterOrDigit);
+
+    private static bool IsPlainFileName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && name.IndexOfAny(['/', '\\', ':']) < 0 && name != "." && name != "..";
 
     public void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse)
     {

@@ -38,20 +38,28 @@ block-aligned loops, the same layout as Nintendo's files and VGAudio's.
 
 1. **Decode.** MP3, WAV, FLAC, OGG, AIFF and BRSTM are decoded by built-in code. M4A/AAC, Opus, WMA and similar formats
    are decoded too when FFmpeg is installed on the PC; Wheel Wizard never downloads FFmpeg itself.
-2. **Tags.** The title, artist and cover art are read from ID3, Vorbis comments, FLAC pictures and MP4 tags. A
-   `cover.jpg` or `folder.jpg` next to the file also works. Rows with custom music get a coloured background and show
-   the cover.
+2. **Tags.** The title, artist and cover art are read from ID3, Vorbis comments, FLAC pictures and MP4 tags; for
+   formats only FFmpeg understands (Opus, WebM, WMA, ...) FFmpeg reads them. A picture with the song's own name next
+   to it (`song.jpg`, as yt-dlp saves thumbnails) is used too. Generic album art (`cover.jpg`, `folder.jpg`, ...) is
+   only used for songs tagged with an album, so a loose download never borrows another album's cover. Rows with custom
+   music get a coloured background and show the cover.
 3. **Loudness matching.** The music being replaced is measured with ITU-R BS.1770 (integrated LUFS), either from
    Retro Rewind's files or, for the original tracks, from the game disc image chosen in Wheel Wizard. The new song is
    set to the same loudness, with a −1 dBFS peak limiter so loud masters do not clip.
-   Retro Rewind also reads a **volume byte** from the header of every music file (offset 0x3F) and uses it *instead of*
-   the volume stored in the sound archive. So a replacement gets the same byte as the file it replaces, which makes both
-   play at exactly the same level whatever the archive says. If the original has no byte, neither does the replacement.
+   Retro Rewind also reads a **volume byte** from the header of every music file (offset 0x3F, 1–127) and uses it
+   *instead of* the volume stored in the sound archive. A replacement gets the original's byte, so both play at the
+   same level. When the song needs more level than its peaks allow (a quiet original with a low byte, or *Louder*),
+   the byte is raised first, up to 127, and only the rest is left to the limiter, so the song keeps its dynamics.
+   If the original has no byte, the archive's volume applies to both and nothing is raised.
    When the original cannot be measured (no game disc set, unreadable disc image), the target is −16 LUFS, a typical
-   level for game music. The row then says "volume estimated", and its tooltip says why. Songs can be nudged afterwards
-   with *Louder* / *Quieter* (±2 dB) in the row menu, and the options menu has a default for new songs.
+   level for game music. The row then says "volume estimated", and its tooltip says why.
+   *Louder* / *Quieter* (±2 dB) in the row menu convert the song again; clicks made during a conversion add up. The
+   row shows the adjustment, and the tooltip shows the loudness reached. A song whose peaks are already at the limit
+   cannot get louder without distorting; the page says so instead of silently squashing it further. WiiCompiled has
+   its own *Music* volume slider in its settings, which scales all music.
 4. **Looping.** Loop points in the file are kept: WAV `smpl` chunks, or `LOOPSTART`/`LOOPLENGTH` tags. Without them the
-   end of the song is crossfaded into the start so the loop has no gap. Jingles such as start fanfares play once.
+   end of the song is crossfaded into the start so the loop has no gap. Loop points shorter than a second are ignored
+   (the game would repeat a tiny fragment as a buzz). Jingles such as start fanfares play once.
 5. **Encoding.** The song is resampled to 32 kHz and encoded to DSP-ADPCM BRSTM.
 
 ## Previewing music

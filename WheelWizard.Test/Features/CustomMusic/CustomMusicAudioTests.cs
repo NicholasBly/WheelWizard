@@ -182,6 +182,136 @@ public class CustomMusicAudioTests
     }
 
     [Fact]
+    public void Converter_RaisesTheVolumeByteBeforeLimiting()
+    {
+        // Asking for more level than the peaks allow: with a volume byte to work with, the byte goes up instead
+        // of the limiter squashing the song.
+        var withByte = MusicConverter.Convert(Song(32000, seconds: 10), new ConversionOptions { TargetLufs = -8, PulsarVolume = 0x40 });
+        var withoutByte = MusicConverter.Convert(Song(32000, seconds: 10), new ConversionOptions { TargetLufs = -8 });
+
+        Assert.True(withByte.Report.PulsarVolume > 0x40);
+        Assert.Equal(withByte.Report.PulsarVolume, BrstmReader.ReadInfo(withByte.Normal).PulsarVolume);
+        Assert.True(withByte.Report.LimiterReductionDb < withoutByte.Report.LimiterReductionDb);
+        Assert.Equal(0, withoutByte.Report.PulsarVolume);
+        // In game: file loudness plus the byte's gain lands on the target (-8 LUFS at byte 0x40).
+        var inGame = withByte.Report.OutputLufs + MusicLoudness.VolumeByteDb(withByte.Report.PulsarVolume) - MusicLoudness.VolumeByteDb(0x40);
+        Assert.InRange(inGame, -8.8, -7.2);
+    }
+
+    [Fact]
+    public void Converter_ReportsTheLoudnessItReached()
+    {
+        var result = MusicConverter.Convert(Song(32000, seconds: 10), new ConversionOptions { TargetLufs = -18 });
+
+        Assert.InRange(result.Report.OutputLufs, -18.6, -17.4);
+        var decoded = LoudnessMeter.Measure(BrstmReader.Decode(result.Normal)).IntegratedLufs;
+        Assert.True(Math.Abs(result.Report.OutputLufs - decoded) < 0.2, $"report {result.Report.OutputLufs:0.00} vs file {decoded:0.00}");
+    }
+
+    [Fact]
+    public void Converter_IgnoresLoopPointsShorterThanASecond()
+    {
+        var song = Song(32000, seconds: 10);
+        song.Loop = new LoopRegion(32000 * 10 - 500, 32000 * 10); // would buzz on a 15 ms fragment
+
+        var result = MusicConverter.Convert(song, new ConversionOptions());
+
+        Assert.False(result.Report.UsedSourceLoopPoints);
+        var info = BrstmReader.ReadInfo(result.Normal);
+        Assert.True(info.SampleCount - info.LoopStart > 32000 * 5);
+    }
+
+    [Fact]
+    public void Converter_SurvivesDamagedSamples()
+    {
+        var song = Song(32000, seconds: 5);
+        song.Channels[0][1000] = float.NaN;
+        song.Channels[1][2000] = float.PositiveInfinity;
+
+        var result = MusicConverter.Convert(song, new ConversionOptions { TargetLufs = -18 });
+
+        Assert.InRange(result.Report.OutputLufs, -18.6, -17.4);
+    }
+
+    [Fact]
+    public void Converter_RejectsSongsTooShortToLoop() =>
+        Assert.Throws<InvalidDataException>(() => MusicConverter.Convert(Song(32000, seconds: 0.5), new ConversionOptions()));
+
+    [Fact]
+    public void Converter_ConvertsShortJingles()
+    {
+        var result = MusicConverter.Convert(Song(32000, seconds: 0.3), new ConversionOptions { Loop = false, TargetLufs = -18 });
+
+        Assert.False(BrstmReader.ReadInfo(result.Normal).Looping);
+        Assert.InRange(result.Report.OutputLufs, -19, -17);
+    }
+
+    [Fact]
+    public void LoudnessMeter_MeasuresClipsShorterThanOneBlock()
+    {
+        // 200 ms is shorter than BS.1770's 400 ms block; the ungated mean is used instead of "silent".
+        var tone = Tone(48000 / 5, 48000, [(1000, 0.1)]);
+
+        var result = LoudnessMeter.Measure([tone, tone], 48000);
+
+        Assert.InRange(result.IntegratedLufs, -20.3, -19.7);
+    }
+
+    [Fact]
+    public void PeakLimiter_HoldsPeaksUnderTheCeilingAndLeavesQuietPassagesAlone()
+    {
+        var length = 32000 * 3;
+        var left = new float[length];
+        for (var i = 0; i < length; i++)
+            left[i] = (float)(0.2 * Math.Sin(2 * Math.PI * 440 * i / 32000));
+        for (var i = 40000; i < 40100; i++)
+            left[i] = 1.5f; // a burst well over full scale
+        var buffer = new AudioBuffer([left, (float[])left.Clone()], 32000);
+
+        var reduction = PeakLimiter.Apply(buffer, ceilingDb: -1);
+
+        var ceiling = (float)Math.Pow(10, -1 / 20.0);
+        Assert.All(buffer.Channels, channel => Assert.True(channel.Max(sample => Math.Abs(sample)) <= ceiling + 1e-4f));
+        Assert.InRange(reduction, 4.0, 5.0); // 1.5 down to 0.891
+        // Far from the burst the signal is untouched.
+        Assert.Equal(0.2 * Math.Sin(2 * Math.PI * 440 * 10 / 32000), buffer.Channels[0][10], 5);
+        Assert.Equal(0.2 * Math.Sin(2 * Math.PI * 440 * 90000 / 32000), buffer.Channels[0][90000], 4);
+    }
+
+    [Fact]
+    public void FfmpegMetadata_IsParsedWithEscapesAndStreamFallback()
+    {
+        var metadata = new AudioMetadata { Artist = "Already known" };
+
+        FfmpegReader.ApplyFfmetadata(";FFMETADATA1\ntitle=A \\= B\\;C\nARTIST=Ignored\n[STREAM]\ntitle=Stream title\nalbum=Stream Album\n", metadata);
+
+        Assert.Equal("A = B;C", metadata.Title);
+        Assert.Equal("Already known", metadata.Artist);
+        Assert.Equal("Stream Album", metadata.Album);
+    }
+
+    [Fact]
+    public void FolderArt_IsOnlyBorrowedByAlbumTracks()
+    {
+        var folder = Directory.CreateTempSubdirectory("wheelwizard-art-").FullName;
+        try
+        {
+            byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5, 6];
+            byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0];
+            File.WriteAllBytes(Path.Combine(folder, "cover.jpg"), jpeg);
+            File.WriteAllBytes(Path.Combine(folder, "My Song.png"), png);
+
+            Assert.Null(FolderArtFinder.Find(Path.Combine(folder, "Download.webm"), allowAlbumArt: false));
+            Assert.Equal("image/jpeg", FolderArtFinder.Find(Path.Combine(folder, "Track 01.mp3"), allowAlbumArt: true)?.MimeType);
+            Assert.Equal("image/png", FolderArtFinder.Find(Path.Combine(folder, "My Song.webm"), allowAlbumArt: false)?.MimeType);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Converter_RejectsSilence() =>
         Assert.Throws<InvalidDataException>(() => MusicConverter.Convert(new AudioBuffer([new float[96000], new float[96000]], 48000), new ConversionOptions()));
 
@@ -249,10 +379,10 @@ public class CustomMusicAudioTests
     }
 
     /// <summary>A few seconds of chords, a bass pulse and noise bursts: enough structure to look like music.</summary>
-    private static AudioBuffer Song(int rate, int seconds)
+    private static AudioBuffer Song(int rate, double seconds)
     {
         var random = new Random(1234);
-        var length = rate * seconds;
+        var length = (int)(rate * seconds);
         var left = new float[length];
         var right = new float[length];
         double[] roots = [220, 174.61, 261.63, 196];
