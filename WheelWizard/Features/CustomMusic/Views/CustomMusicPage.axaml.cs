@@ -143,6 +143,54 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
         row?.ContextMenu?.Open();
     }
 
+    private async void PlayOriginal_Click(object? sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (ItemFrom(sender) is { } item)
+            await ShowPreviewResultAsync(item, custom: false);
+    }
+
+    private async void PlayCustom_Click(object? sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (ItemFrom(sender) is { } item)
+            await ShowPreviewResultAsync(item, custom: true);
+    }
+
+    private async Task ShowPreviewResultAsync(MusicSlotItem item, bool custom)
+    {
+        var result = await _model.PreviewAsync(item, custom);
+        if (result.IsFailure)
+            ViewUtils.ShowSnackbar(result.Error.Message, ViewUtils.SnackbarType.Warning);
+    }
+
+    private void StopPreview_Click(object? sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        _model.StopPreview();
+    }
+
+    private void PlayPause_Click(object? sender, RoutedEventArgs e) => _model.TogglePause();
+
+    private void Seek_PointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is Control bar && bar.Bounds.Width > 0)
+            _model.SeekTo(e.GetPosition(bar).X / bar.Bounds.Width);
+    }
+
+    private async void Louder_Click(object? sender, RoutedEventArgs e) => await AdjustVolumeAsync(sender, CustomMusicViewModel.VolumeStepDb);
+
+    private async void Quieter_Click(object? sender, RoutedEventArgs e) => await AdjustVolumeAsync(sender, -CustomMusicViewModel.VolumeStepDb);
+
+    private async Task AdjustVolumeAsync(object? sender, double deltaDb)
+    {
+        if (ItemFrom(sender) is not { } item)
+            return;
+        var result = await _model.AdjustVolumeAsync(item, deltaDb);
+        if (result.IsFailure && item.Error == null)
+            ViewUtils.ShowSnackbar(result.Error.Message, ViewUtils.SnackbarType.Warning);
+    }
+
     private async Task AssignAsync(MusicSlotItem item, string path)
     {
         var result = await _model.AssignAsync(item, path);

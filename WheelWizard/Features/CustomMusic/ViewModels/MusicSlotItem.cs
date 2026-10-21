@@ -14,6 +14,16 @@ public sealed class MusicGroupHeader(string title, bool isFirst)
     public bool IsFirst { get; } = isFirst;
 }
 
+public enum ItemPreviewState
+{
+    None,
+
+    /// <summary>The music is being read (the original may come out of the disc image).</summary>
+    Loading,
+    Playing,
+    Paused,
+}
+
 /// <summary>One row in the custom music list.</summary>
 public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
 {
@@ -24,6 +34,8 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     private string? _error;
     private Bitmap? _cover;
     private bool _isDropTarget;
+    private ItemPreviewState _previewState;
+    private bool _canPreviewOriginal;
 
     public MusicSlot Slot { get; private set; } = slot;
     public string Name => Slot.Name;
@@ -80,6 +92,23 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         set => Set(ref _isDropTarget, value);
     }
 
+    /// <summary>Whether this row is playing in the preview player (either the original or the custom song).</summary>
+    public ItemPreviewState PreviewState
+    {
+        get => _previewState;
+        set => Set(ref _previewState, value);
+    }
+
+    /// <summary>Whether the original music of this row is a file that can be previewed.</summary>
+    public bool CanPreviewOriginal
+    {
+        get => _canPreviewOriginal;
+        set => Set(ref _canPreviewOriginal, value);
+    }
+
+    public bool IsPreviewing => PreviewState != ItemPreviewState.None;
+    public bool ShowPlayButton => CanPreviewOriginal && !IsPreviewing;
+
     public bool IsCustom => Current != null;
     public bool IsPending => Saved?.StorageId != Current?.StorageId;
     public bool HasError => Error != null && !IsProcessing;
@@ -99,7 +128,9 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
             if (Current is { } entry)
             {
                 var artist = string.IsNullOrWhiteSpace(entry.Artist) ? null : entry.Artist;
-                return artist == null ? $"♪ {entry.DisplayTitle}" : $"♪ {entry.DisplayTitle} — {artist}";
+                var text = artist == null ? $"♪ {entry.DisplayTitle}" : $"♪ {entry.DisplayTitle} — {artist}";
+                // The volume could not be matched to the original, so it is a guess; say so.
+                return entry.ReferenceNote == null ? text : $"{text} · {t("custom_music.volume_estimated")}";
             }
 
             return Slot.Detail ?? Slot.FileNames.FirstOrDefault() ?? string.Empty;
@@ -133,6 +164,10 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                         }
                     )
                 );
+                if (Math.Abs(entry.VolumeOffsetDb) >= 0.05)
+                    lines.Add(t("custom_music.details.volume_offset", new { amount = entry.VolumeOffsetDb.ToString("+0.#;-0.#") }));
+                if (entry.ReferenceNote != null)
+                    lines.Add(t("custom_music.details.reference_problem", new { message = entry.ReferenceNote }));
                 if (entry.UsedSourceLoopPoints)
                     lines.Add(t("custom_music.details.loop_points"));
             }
@@ -179,6 +214,10 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         nameof(Error),
         nameof(Cover),
         nameof(IsDropTarget),
+        nameof(PreviewState),
+        nameof(CanPreviewOriginal),
+        nameof(IsPreviewing),
+        nameof(ShowPlayButton),
         nameof(IsCustom),
         nameof(IsPending),
         nameof(HasError),

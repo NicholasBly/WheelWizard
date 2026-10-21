@@ -143,6 +143,14 @@
             <Setter Property="Padding" Value="18" />
         </Style>
 
+        <Style Selector="Border.PlayerBar">
+            <Setter Property="Background" Value="{StaticResource Neutral900}" />
+            <Setter Property="BorderBrush" Value="{StaticResource Brand800}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="10,8" />
+        </Style>
+
         <Style Selector="Border.DropHint">
             <Setter Property="Background" Value="{StaticResource Neutral800}" />
             <Setter Property="BorderBrush" Value="{StaticResource Brand400}" />
@@ -159,6 +167,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -209,6 +218,10 @@
                             <StackPanel Spacing="6">
                                 <components:FormFieldLabel Text="{loc:T custom_music.loudness.label}" />
                                 <TextBlock Classes="TinyText" TextWrapping="Wrap" Text="{loc:T custom_music.loudness.help}" />
+                                <components:FormFieldLabel Text="{loc:T custom_music.volume.label}" Margin="0,6,0,0" />
+                                <components:Dropdown x:Name="VolumeDropdown" HorizontalAlignment="Stretch"
+                                                     ItemsSource="{Binding VolumeOptions}" SelectedItem="{Binding SelectedVolume, Mode=TwoWay}" />
+                                <TextBlock Classes="TinyText" TextWrapping="Wrap" Text="{loc:T custom_music.volume.help}" />
                             </StackPanel>
                             <Border Height="1" Background="{StaticResource Neutral700}" />
                             <TextBlock Classes="TinyText" TextWrapping="Wrap" Text="{loc:T custom_music.formats_help}" />
@@ -267,6 +280,10 @@
                             <Border.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="{loc:T custom_music.menu.choose}" Click="ChooseSong_Click" />
+                                    <MenuItem Header="{loc:T custom_music.menu.play_original}" Click="PlayOriginal_Click" IsVisible="{Binding CanPreviewOriginal}" />
+                                    <MenuItem Header="{loc:T custom_music.menu.play_custom}" Click="PlayCustom_Click" IsVisible="{Binding IsCustom}" />
+                                    <MenuItem Header="{loc:T custom_music.menu.louder}" Click="Louder_Click" IsVisible="{Binding IsCustom}" />
+                                    <MenuItem Header="{loc:T custom_music.menu.quieter}" Click="Quieter_Click" IsVisible="{Binding IsCustom}" />
                                     <MenuItem Header="{loc:T custom_music.menu.undo}" Click="UndoChange_Click" IsVisible="{Binding IsPending}" />
                                     <MenuItem Header="{loc:T custom_music.menu.reset}" Click="Reset_Click" IsVisible="{Binding IsCustom}" />
                                     <Separator IsVisible="{Binding IsCustom}" />
@@ -296,6 +313,18 @@
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                                     <components:StatusBadge Text="{loc:T custom_music.unsaved}" Variant="Warning" VerticalAlignment="Center"
                                                             IsVisible="{Binding IsPending}" IsHitTestVisible="False" />
+                                    <components:ActionButton IconData="{StaticResource Play}" Variant="Ghost" Tone="Secondary"
+                                                             IsCircular="True" Size="Compact" VerticalAlignment="Center"
+                                                             IsVisible="{Binding ShowPlayButton}"
+                                                             ToolTip.Tip="{loc:T custom_music.preview.play_tip}"
+                                                             AutomationProperties.Name="{loc:T custom_music.preview.play_tip}"
+                                                             Click="PlayOriginal_Click" />
+                                    <components:ActionButton IconData="{StaticResource Stop}" Variant="Ghost" Tone="Brand"
+                                                             IsCircular="True" Size="Compact" VerticalAlignment="Center"
+                                                             IsVisible="{Binding IsPreviewing}"
+                                                             ToolTip.Tip="{loc:T custom_music.preview.stop_tip}"
+                                                             AutomationProperties.Name="{loc:T custom_music.preview.stop_tip}"
+                                                             Click="StopPreview_Click" />
                                     <components:ActionButton IconData="{StaticResource ContextDots}" Variant="Ghost" Tone="Secondary"
                                                              IsCircular="True" Size="Compact" VerticalAlignment="Center"
                                                              AutomationProperties.Name="{loc:T custom_music.menu.more}"
@@ -324,5 +353,37 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- Preview player -->
+        <Border Grid.Row="4" Classes="PlayerBar" IsVisible="{Binding IsPlayerVisible}" Margin="3,4,3,10">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Panel VerticalAlignment="Center">
+                    <components:ActionButton IconData="{StaticResource Pause}" IsCircular="True" Tone="Brand" Size="Compact"
+                                             IsVisible="{Binding IsPlaying}" ToolTip.Tip="{loc:T custom_music.preview.pause_tip}"
+                                             AutomationProperties.Name="{loc:T custom_music.preview.pause_tip}" Click="PlayPause_Click" />
+                    <components:ActionButton IconData="{StaticResource Play}" IsCircular="True" Tone="Brand" Size="Compact"
+                                             IsVisible="{Binding !IsPlaying}" IsEnabled="{Binding !IsPreviewLoading}"
+                                             ToolTip.Tip="{loc:T custom_music.preview.resume_tip}"
+                                             AutomationProperties.Name="{loc:T custom_music.preview.resume_tip}" Click="PlayPause_Click" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{Binding NowPlayingTitle}" Classes="RowTitle" MaxWidth="260" />
+                            <TextBlock Text="{Binding NowPlayingKind}" Classes="RowSubtitle" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{Binding PlaybackTime}" Classes="RowSubtitle" VerticalAlignment="Center" />
+                    </Grid>
+                    <!-- Clicking the bar jumps to that point of the song. -->
+                    <Panel Background="Transparent" Height="14" Cursor="Hand" PointerPressed="Seek_PointerPressed">
+                        <ProgressBar Minimum="0" Maximum="1" Value="{Binding PlaybackFraction}" Height="4"
+                                     VerticalAlignment="Center" IsHitTestVisible="False" />
+                    </Panel>
+                </StackPanel>
+                <components:ActionButton Grid.Column="2" IconData="{StaticResource Stop}" IsCircular="True" Variant="Ghost" Tone="Secondary"
+                                         Size="Compact" VerticalAlignment="Center" ToolTip.Tip="{loc:T custom_music.preview.stop_tip}"
+                                         AutomationProperties.Name="{loc:T custom_music.preview.stop_tip}" Click="StopPreview_Click" />
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

@@ -157,6 +157,30 @@ public class CustomMusicAudioTests
         Assert.Equal(32000 * 6, info.SampleCount - info.LoopStart);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(0x40)]
+    [InlineData(0xFF)]
+    public void Converter_WritesTheRequestedVolumeByteToBothFiles(int volume)
+    {
+        var result = MusicConverter.Convert(Song(32000, seconds: 8), new ConversionOptions { CreateFinalLap = true, PulsarVolume = (byte)volume });
+
+        var expected = (byte)Math.Min(volume, 0x7F); // Retro Rewind ignores anything above 0x7F
+        Assert.Equal(expected, BrstmReader.ReadInfo(result.Normal).PulsarVolume);
+        Assert.Equal(expected, BrstmReader.ReadInfo(result.FinalLap!).PulsarVolume);
+    }
+
+    [Fact]
+    public void Converter_VolumeOffsetMakesTheSongLouder()
+    {
+        var song = Song(32000, seconds: 10);
+        var plain = MusicConverter.Convert(song, new ConversionOptions { TargetLufs = -20 });
+        var louder = MusicConverter.Convert(song, new ConversionOptions { TargetLufs = -20, VolumeOffsetDb = 4 });
+
+        var difference = LoudnessMeter.Measure(BrstmReader.Decode(louder.Normal)).IntegratedLufs - LoudnessMeter.Measure(BrstmReader.Decode(plain.Normal)).IntegratedLufs;
+        Assert.InRange(difference, 3.6, 4.4);
+    }
+
     [Fact]
     public void Converter_RejectsSilence() =>
         Assert.Throws<InvalidDataException>(() => MusicConverter.Convert(new AudioBuffer([new float[96000], new float[96000]], 48000), new ConversionOptions()));

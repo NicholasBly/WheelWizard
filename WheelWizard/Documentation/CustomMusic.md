@@ -41,14 +41,31 @@ block-aligned loops, the same layout as Nintendo's files and VGAudio's.
 2. **Tags.** The title, artist and cover art are read from ID3, Vorbis comments, FLAC pictures and MP4 tags. A
    `cover.jpg` or `folder.jpg` next to the file also works. Rows with custom music get a coloured background and show
    the cover.
-3. **Loudness matching.** The music being replaced is measured with ITU-R BS.1770 (integrated LUFS). The measurement
-   includes the volume byte Retro Rewind applies from the BRSTM header (0x3F). The music is read from Retro Rewind's
-   files, or from the game disc image chosen in Wheel Wizard for the original tracks. The new song is then set to the
-   same loudness, with a −1 dBFS peak limiter so loud masters do not clip. If nothing can be measured, the target is
-   −19 LUFS.
+3. **Loudness matching.** The music being replaced is measured with ITU-R BS.1770 (integrated LUFS), either from
+   Retro Rewind's files or, for the original tracks, from the game disc image chosen in Wheel Wizard. The new song is
+   set to the same loudness, with a −1 dBFS peak limiter so loud masters do not clip.
+   Retro Rewind also reads a **volume byte** from the header of every music file (offset 0x3F) and uses it *instead of*
+   the volume stored in the sound archive. So a replacement gets the same byte as the file it replaces, which makes both
+   play at exactly the same level whatever the archive says. If the original has no byte, neither does the replacement.
+   When the original cannot be measured (no game disc set, unreadable disc image), the target is −16 LUFS, a typical
+   level for game music. The row then says "volume estimated", and its tooltip says why. Songs can be nudged afterwards
+   with *Louder* / *Quieter* (±2 dB) in the row menu, and the options menu has a default for new songs.
 4. **Looping.** Loop points in the file are kept: WAV `smpl` chunks, or `LOOPSTART`/`LOOPLENGTH` tags. Without them the
    end of the song is crossfaded into the start so the loop has no gap. Jingles such as start fanfares play once.
 5. **Encoding.** The song is resampled to 32 kHz and encoded to DSP-ADPCM BRSTM.
+
+## Previewing music
+
+Every row with a playable original has a play button, so you can hear what a track is before replacing it (useful when
+several tracks have similar names). The original comes from Retro Rewind's own files, or from the game disc image for
+the original game's music; the row menu also has *Play your song* for the converted replacement, exactly as it will be
+installed. A player bar at the bottom shows progress (click it to jump to a point), pause and stop.
+
+Playback uses the operating system directly: Windows' `PlaySound`, `afplay` on macOS, and on Linux the first of
+`paplay`, `pw-play`, `aplay`, `ffplay`, `play` or `mpv` that is installed. Music is stopped when you leave the page.
+
+Tracks whose names look the same (several "3DS" entries, say) show their file name next to the description, and get it
+appended to the name when the names are identical.
 
 ## Saving
 

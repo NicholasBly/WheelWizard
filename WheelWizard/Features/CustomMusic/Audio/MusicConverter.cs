@@ -35,6 +35,13 @@ public sealed record ConversionOptions
     /// <summary>User adjustment on top of the matched loudness.</summary>
     public double VolumeOffsetDb { get; init; }
 
+    /// <summary>
+    /// The volume byte (1..127) to store in the BRSTM header, or 0 for none. Retro Rewind reads it when the music
+    /// starts and uses it instead of the volume in the sound archive, so a replacement must carry the same byte
+    /// as the music it replaces to play at the same level.
+    /// </summary>
+    public byte PulsarVolume { get; init; }
+
     /// <summary>Length of the crossfade that makes songs without loop points loop smoothly.</summary>
     public double CrossfadeSeconds { get; init; } = 2.5;
 
@@ -57,10 +64,10 @@ public sealed record ConversionResult(byte[] Normal, byte[]? FinalLap, Conversio
 public static class MusicLoudness
 {
     /// <summary>
-    /// Fallback when the original music could not be measured. Typical for Mario Kart Wii's own streams;
-    /// real measurements of the replaced music always take priority.
+    /// Fallback when the original music could not be measured: a typical level for game music (loud enough
+    /// to sit over engine noise and effects). Real measurements of the replaced music always take priority.
     /// </summary>
-    public const double DefaultTargetLufs = -19.0;
+    public const double DefaultTargetLufs = -16.0;
 
     public const double FinalLapPitchSpeed = 1.06;
     public const double FinalLapTempoSpeed = 1.08;
@@ -142,11 +149,11 @@ public static class MusicConverter
         byte[] normal = [];
         byte[]? finalLap = null;
         Parallel.Invoke(
-            () => normal = Encode(normalBuffer),
+            () => normal = Encode(normalBuffer, options.PulsarVolume),
             () =>
             {
                 if (finalBuffer != null)
-                    finalLap = Encode(finalBuffer);
+                    finalLap = Encode(finalBuffer, options.PulsarVolume);
             }
         );
         if (options.CreateFinalLap && options.FinalLapStyle == FinalLapStyle.Unchanged)
@@ -173,7 +180,7 @@ public static class MusicConverter
         return faster.Loop != null ? AudioOps.AlignLoopStart(faster, Brstm.SamplesPerBlock) : faster;
     }
 
-    private static byte[] Encode(AudioBuffer buffer)
+    private static byte[] Encode(AudioBuffer buffer, byte pulsarVolume)
     {
         var pcm = new short[buffer.ChannelCount][];
         for (var c = 0; c < buffer.ChannelCount; c++)
@@ -186,6 +193,7 @@ public static class MusicConverter
                 SampleRate = buffer.SampleRate,
                 Looping = buffer.Loop != null,
                 LoopStart = buffer.Loop?.Start ?? 0,
+                PulsarVolume = pulsarVolume == 0 ? null : Math.Min(pulsarVolume, (byte)0x7F),
             }
         );
     }

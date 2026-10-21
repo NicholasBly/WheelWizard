@@ -46,6 +46,13 @@ public sealed record CustomMusicEntry
     public double TargetLufs { get; init; }
     public double VolumeOffsetDb { get; init; }
     public MusicReferenceSource ReferenceSource { get; init; }
+
+    /// <summary>Why the original music could not be measured (only set when <see cref="ReferenceSource"/> is an estimate).</summary>
+    public string? ReferenceNote { get; init; }
+
+    /// <summary>The volume byte written to the BRSTM header, copied from the music this replaces (0 = none).</summary>
+    public byte PulsarVolume { get; init; }
+
     public FinalLapStyle FinalLapStyle { get; init; }
     public double DurationSeconds { get; init; }
     public bool UsedSourceLoopPoints { get; init; }
@@ -62,6 +69,10 @@ public sealed record CustomMusicLibraryData
     public int Version { get; init; } = 1;
     public MusicSortMode SortMode { get; init; } = MusicSortMode.Default;
     public FinalLapStyle FinalLapStyle { get; init; } = FinalLapStyle.Faster;
+
+    /// <summary>Volume adjustment (dB) applied to songs added from now on.</summary>
+    public double VolumeOffsetDb { get; init; }
+
     public List<CustomMusicEntry> Entries { get; init; } = [];
 }
 

@@ -9,8 +9,13 @@ using WheelWizard.Settings;
 
 namespace WheelWizard.CustomMusic.Library;
 
-/// <summary>How loud the music being replaced is, and whether it loops.</summary>
-public sealed record MusicReference(double Lufs, bool? Loops, MusicReferenceSource Source);
+/// <summary>
+/// The music being replaced: how loud the file itself is (<paramref name="Lufs"/>, before any volume byte), whether it
+/// loops, and the volume byte Retro Rewind applies to it (0 = none). A replacement is matched to the loudness and
+/// gets the same byte, so both play at the same level. <paramref name="Problem"/> says why the original could not
+/// be measured when <paramref name="Source"/> is <see cref="MusicReferenceSource.Estimate"/>.
+/// </summary>
+public sealed record MusicReference(double Lufs, bool? Loops, MusicReferenceSource Source, byte PulsarVolume = 0, string? Problem = null);
 
 public interface IMusicReferenceService
 {
@@ -29,7 +34,7 @@ public sealed class MusicReferenceService(
     ILogger<MusicReferenceService> logger
 ) : IMusicReferenceService
 {
-    private sealed record CachedReference(double Lufs, bool Loops, MusicReferenceSource Source);
+    private sealed record CachedReference(double Lufs, bool Loops, MusicReferenceSource Source, byte PulsarVolume = 0);
 
     private readonly SemaphoreSlim _lock = new(1, 1);
     private Dictionary<string, CachedReference>? _cache;
@@ -42,31 +47,51 @@ public sealed class MusicReferenceService(
         try
         {
             var cache = LoadCache();
+            string? problem = null;
 
             if (slot.RetroRewindFilePath is { } shipped && fileSystem.File.Exists(shipped))
             {
                 var key = Identity("rr", shipped, shipped);
                 if (cache.TryGetValue(key, out var cached))
-                    return new(cached.Lufs, cached.Loops, cached.Source);
+                    return From(cached);
 
                 var measured = await Task.Run(() => Measure(fileSystem.File.ReadAllBytes(shipped)), cancellationToken);
                 if (measured is { } result)
-                    return Remember(cache, key, result.Lufs, result.Loops, MusicReferenceSource.RetroRewind);
+                    return Remember(cache, key, result, MusicReferenceSource.RetroRewind);
+                problem = t("custom_music.reference_problem.unreadable_file", new { file = fileSystem.Path.GetFileName(shipped) });
             }
 
             var gamePath = settings.Get<string>(settings.GAME_LOCATION);
-            if (slot.GameFileName is { } gameFile && !string.IsNullOrWhiteSpace(gamePath) && fileSystem.File.Exists(gamePath))
+            if (slot.GameFileName is { } gameFile)
             {
-                var key = Identity("disc", gamePath, gameFile);
-                if (cache.TryGetValue(key, out var cached))
-                    return new(cached.Lufs, cached.Loops, cached.Source);
+                if (string.IsNullOrWhiteSpace(gamePath) || !fileSystem.File.Exists(gamePath))
+                {
+                    problem ??= t("custom_music.disc.not_set");
+                }
+                else
+                {
+                    var key = Identity("disc", gamePath, gameFile);
+                    if (cache.TryGetValue(key, out var cached))
+                        return From(cached);
 
-                var bytes = await Task.Run(() => discReader.ReadStreamFile(gamePath, gameFile), cancellationToken);
-                if (bytes != null && Measure(bytes) is { } result)
-                    return Remember(cache, key, result.Lufs, result.Loops, MusicReferenceSource.GameDisc);
+                    var bytes = await Task.Run(() => discReader.ReadStreamFile(gamePath, gameFile), cancellationToken);
+                    if (bytes.IsFailure)
+                    {
+                        logger.LogWarning("Could not read {File} from the game disc: {Message}", gameFile, bytes.Error.Message);
+                        problem ??= bytes.Error.Message;
+                    }
+                    else if (Measure(bytes.Value) is { } result)
+                    {
+                        return Remember(cache, key, result, MusicReferenceSource.GameDisc);
+                    }
+                    else
+                    {
+                        problem ??= t("custom_music.reference_problem.unreadable_file", new { file = gameFile });
+                    }
+                }
             }
 
-            return new(EstimateFrom(cache), null, MusicReferenceSource.Estimate);
+            return new(EstimateFrom(cache), null, MusicReferenceSource.Estimate, 0, problem);
         }
         finally
         {
@@ -80,11 +105,18 @@ public sealed class MusicReferenceService(
     /// </summary>
     private static double EstimateFrom(Dictionary<string, CachedReference> cache)
     {
-        var measured = cache.Values.Where(value => value.Source != MusicReferenceSource.Estimate).Select(value => value.Lufs).Order().ToList();
+        // Entries from before the "v2|" key prefix folded the volume byte into the number; ignore them.
+        var measured = cache
+            .Where(pair => pair.Key.StartsWith("v2|", StringComparison.Ordinal) && pair.Value.Source != MusicReferenceSource.Estimate)
+            .Select(pair => pair.Value.Lufs)
+            .Order()
+            .ToList();
         return measured.Count >= 3 ? measured[measured.Count / 2] : MusicLoudness.DefaultTargetLufs;
     }
 
-    private (double Lufs, bool Loops)? Measure(byte[] brstm)
+    private static MusicReference From(CachedReference cached) => new(cached.Lufs, cached.Loops, cached.Source, cached.PulsarVolume);
+
+    private (double Lufs, bool Loops, byte PulsarVolume)? Measure(byte[] brstm)
     {
         try
         {
@@ -93,8 +125,9 @@ public sealed class MusicReferenceService(
             var loudness = LoudnessMeter.Measure(audio);
             if (loudness.IsSilent)
                 return null;
-            // Pulsar scales the stream by header byte 0x3F, so that is part of what players hear.
-            return (loudness.IntegratedLufs + 20 * Math.Log10(info.PulsarGain), info.Looping);
+            // The file's own loudness. Pulsar scales the stream by header byte 0x3F while it plays; instead of
+            // folding that into the number, replacements get the same byte (see MusicReference).
+            return (loudness.IntegratedLufs, info.Looping, info.PulsarVolume);
         }
         catch (Exception exception) when (exception is InvalidDataException or IndexOutOfRangeException or ArgumentException)
         {
@@ -103,9 +136,14 @@ public sealed class MusicReferenceService(
         }
     }
 
-    private MusicReference Remember(Dictionary<string, CachedReference> cache, string key, double lufs, bool loops, MusicReferenceSource source)
+    private MusicReference Remember(
+        Dictionary<string, CachedReference> cache,
+        string key,
+        (double Lufs, bool Loops, byte PulsarVolume) measured,
+        MusicReferenceSource source
+    )
     {
-        cache[key] = new CachedReference(lufs, loops, source);
+        cache[key] = new CachedReference(measured.Lufs, measured.Loops, source, measured.PulsarVolume);
         try
         {
             fileSystem.Directory.CreateDirectory(library.RootFolderPath);
@@ -116,7 +154,7 @@ public sealed class MusicReferenceService(
             logger.LogDebug(exception, "Could not store the reference loudness cache.");
         }
 
-        return new(lufs, loops, source);
+        return new(measured.Lufs, measured.Loops, source, measured.PulsarVolume);
     }
 
     private Dictionary<string, CachedReference> LoadCache()
@@ -141,6 +179,6 @@ public sealed class MusicReferenceService(
     private string Identity(string kind, string containerPath, string item)
     {
         var info = fileSystem.FileInfo.New(containerPath);
-        return $"{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
+        return $"v2|{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
     }
 }

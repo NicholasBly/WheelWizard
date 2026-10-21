@@ -12,18 +12,20 @@ namespace WheelWizard.CustomMusic.Library;
 /// </summary>
 public interface IGameDiscMusicReader
 {
-    /// <summary>Returns the bytes of /sound/strm/<paramref name="fileName"/>, or null if the game file can't provide it.</summary>
-    byte[]? ReadStreamFile(string gamePath, string fileName);
+    /// <summary>The bytes of /sound/strm/<paramref name="fileName"/>, or an error saying why the disc could not provide it.</summary>
+    OperationResult<byte[]> ReadStreamFile(string gamePath, string fileName);
 }
 
 public sealed class GameDiscMusicReader(IFileSystem fileSystem) : IGameDiscMusicReader
 {
     private const uint DataPartitionType = 0;
 
-    public byte[]? ReadStreamFile(string gamePath, string fileName)
+    public OperationResult<byte[]> ReadStreamFile(string gamePath, string fileName)
     {
-        if (string.IsNullOrWhiteSpace(gamePath) || !fileSystem.File.Exists(gamePath))
-            return null;
+        if (string.IsNullOrWhiteSpace(gamePath))
+            return new OperationError { Message = t("custom_music.disc.not_set") };
+        if (!fileSystem.File.Exists(gamePath))
+            return new OperationError { Message = t("custom_music.disc.missing") };
 
         Stream? stream = null;
         IBlobReader? disc = null;
@@ -40,16 +42,16 @@ public sealed class GameDiscMusicReader(IFileSystem fileSystem) : IGameDiscMusic
 
             var entry = files.Find($"sound/strm/{fileName}");
             if (entry == null || entry.IsDirectory || entry.Size <= 0 || entry.Size > 64 * 1024 * 1024)
-                return null;
+                return new OperationError { Message = t("custom_music.disc.no_file", new { file = fileName }) };
 
             using var output = new MemoryStream((int)entry.Size);
             files.CopyFileTo(entry, output);
             return output.ToArray();
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            // Unsupported, encrypted with unknown keys, or damaged images simply mean "no reference".
-            return null;
+            // Unsupported, encrypted with unknown keys, or damaged images: the caller falls back to an estimate.
+            return new OperationError { Message = t("custom_music.disc.unreadable", new { message = exception.Message }), Exception = exception };
         }
         finally
         {

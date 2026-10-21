@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using WheelWizard.CustomMusic.Audio;
 using WheelWizard.CustomMusic.Catalog;
 using WheelWizard.CustomMusic.Library;
+using WheelWizard.CustomMusic.Playback;
 
 namespace WheelWizard.CustomMusic.ViewModels;
 
@@ -23,9 +24,24 @@ public sealed class FinalLapOption(FinalLapStyle style, string label)
     public override string ToString() => label;
 }
 
-/// <summary>State and workflow of the Custom Music page: the slot list, conversions, and saving.</summary>
-public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyPropertyChanged, IDisposable
+public sealed class VolumeOption(double decibels, string label)
 {
+    public double Decibels { get; } = decibels;
+
+    public override string ToString() => label;
+}
+
+/// <summary>State and workflow of the Custom Music page: the slot list, conversions, previews and saving.</summary>
+public sealed class CustomMusicViewModel(ICustomMusicService service, IMusicPreviewService preview, IMusicPreviewPlayer player)
+    : INotifyPropertyChanged,
+        IDisposable
+{
+    /// <summary>One step of the "Louder" / "Quieter" row actions.</summary>
+    public const double VolumeStepDb = 2;
+
+    private const double MaxVolumeOffsetDb = 18;
+    private const double MinVolumeOffsetDb = -12;
+
     // Conversions are CPU and memory heavy; a couple at a time keeps the app responsive.
     private readonly SemaphoreSlim _conversionSlots = new(2, 2);
     private readonly CancellationTokenSource _lifetime = new();
@@ -36,6 +52,11 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
     private string _searchText = string.Empty;
     private SortOption _selectedSort = null!;
     private FinalLapOption _selectedFinalLap = null!;
+    private VolumeOption _selectedVolume = null!;
+    private MusicSlotItem? _previewItem;
+    private bool _previewIsCustom;
+    private int _previewRequest;
+    private bool _playerHooked;
     private bool _isLoading = true;
     private bool _isSaving;
     private CustomMusicModState _modState;
@@ -56,6 +77,15 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
         new(FinalLapStyle.Faster, t("custom_music.final_lap.faster")),
         new(FinalLapStyle.FasterKeepPitch, t("custom_music.final_lap.faster_keep_pitch")),
         new(FinalLapStyle.Unchanged, t("custom_music.final_lap.unchanged")),
+    ];
+
+    public IReadOnlyList<VolumeOption> VolumeOptions { get; } =
+    [
+        new(-3, t("custom_music.volume.quieter")),
+        new(0, t("custom_music.volume.same")),
+        new(3, t("custom_music.volume.louder")),
+        new(6, t("custom_music.volume.much_louder")),
+        new(9, t("custom_music.volume.loudest")),
     ];
 
     public SortOption SelectedSort
@@ -80,6 +110,19 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
             if (value == null || ReferenceEquals(_selectedFinalLap, value))
                 return;
             _selectedFinalLap = value;
+            Notify();
+            PersistPreferences();
+        }
+    }
+
+    public VolumeOption SelectedVolume
+    {
+        get => _selectedVolume;
+        set
+        {
+            if (value == null || ReferenceEquals(_selectedVolume, value))
+                return;
+            _selectedVolume = value;
             Notify();
             PersistPreferences();
         }
@@ -159,6 +202,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
             _preferencesReady = false;
             SelectedSort = SortOptions.FirstOrDefault(option => option.Mode == library.SortMode) ?? SortOptions[0];
             SelectedFinalLap = FinalLapOptions.FirstOrDefault(option => option.Style == library.FinalLapStyle) ?? FinalLapOptions[0];
+            SelectedVolume = VolumeOptions.OrderBy(option => Math.Abs(option.Decibels - library.VolumeOffsetDb)).First();
             _preferencesReady = true;
 
             foreach (var item in _items)
@@ -167,7 +211,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
             var entries = library.Entries.ToDictionary(entry => entry.Key, StringComparer.OrdinalIgnoreCase);
             foreach (var slot in _catalog.Slots)
             {
-                var item = new MusicSlotItem(slot);
+                var item = new MusicSlotItem(slot) { CanPreviewOriginal = preview.HasOriginal(slot) };
                 if (entries.Remove(slot.Key, out var entry))
                 {
                     item.Saved = entry;
@@ -194,8 +238,11 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
         }
     }
 
-    /// <summary>Converts <paramref name="path"/> for <paramref name="item"/>; it stays pending until saved.</summary>
-    public async Task<OperationResult> AssignAsync(MusicSlotItem item, string path)
+    /// <summary>
+    /// Converts <paramref name="path"/> for <paramref name="item"/>; it stays pending until saved.
+    /// <paramref name="volumeOffsetDb"/> defaults to the volume chosen in the options.
+    /// </summary>
+    public async Task<OperationResult> AssignAsync(MusicSlotItem item, string path, double? volumeOffsetDb = null)
     {
         if (!AudioFileDecoder.IsSupportedExtension(path))
         {
@@ -217,7 +264,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
             try
             {
                 var progress = new Progress<double>(value => item.Progress = value);
-                var result = await service.ConvertAsync(item.Slot, path, SelectedFinalLap.Style, 0, progress, cancellation.Token);
+                var result = await service.ConvertAsync(item.Slot, path, SelectedFinalLap.Style, volumeOffsetDb ?? SelectedVolume.Decibels, progress, cancellation.Token);
                 if (cancellation.IsCancellationRequested)
                     return Fail(t("custom_music.error.cancelled"));
                 if (result.IsFailure)
@@ -226,6 +273,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
                     return result.Error;
                 }
 
+                StopPreviewOf(item, customOnly: true);
                 item.Current = result.Value;
                 item.Cover = LoadCover(result.Value);
                 return Ok();
@@ -267,9 +315,27 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
         return matches;
     }
 
+    /// <summary>Makes the song of <paramref name="item"/> louder or quieter by converting its source file again.</summary>
+    public async Task<OperationResult> AdjustVolumeAsync(MusicSlotItem item, double deltaDb)
+    {
+        if (item.Current is not { } entry || item.IsProcessing)
+            return Ok();
+
+        if (!File.Exists(entry.SourcePath))
+        {
+            var message = t("custom_music.error.file_missing");
+            item.Error = message;
+            return Fail(message);
+        }
+
+        var offset = Math.Clamp(entry.VolumeOffsetDb + deltaDb, MinVolumeOffsetDb, MaxVolumeOffsetDb);
+        return await AssignAsync(item, entry.SourcePath, offset);
+    }
+
     /// <summary>Back to the original game / Retro Rewind music (after saving).</summary>
     public void ResetToOriginal(MusicSlotItem item)
     {
+        StopPreviewOf(item, customOnly: true);
         CancelConversion(item);
         item.Error = null;
         item.Current = null;
@@ -280,6 +346,7 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
     /// <summary>Forgets an unsaved change to this slot.</summary>
     public void UndoChange(MusicSlotItem item)
     {
+        StopPreviewOf(item, customOnly: true);
         CancelConversion(item);
         item.Error = null;
         item.Current = item.Saved;
@@ -334,6 +401,157 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
         RefreshModState();
         return result;
     }
+
+    #region Preview
+
+    public bool IsPreviewAvailable => player.IsAvailable;
+    public bool IsPlayerVisible => _previewItem != null;
+    public bool IsPlaying => player.State == PreviewState.Playing;
+    public bool IsPreviewLoading => _previewItem?.PreviewState == ItemPreviewState.Loading;
+    public string NowPlayingTitle => _previewItem?.Name ?? string.Empty;
+
+    public string NowPlayingKind =>
+        _previewItem == null ? string.Empty
+        : IsPreviewLoading ? t("custom_music.preview.loading")
+        : _previewIsCustom ? t("custom_music.preview.your_song")
+        : t("custom_music.preview.original");
+
+    public double PlaybackFraction => player.Duration > TimeSpan.Zero ? Math.Clamp(player.Position / player.Duration, 0, 1) : 0;
+    public string PlaybackTime => player.Duration > TimeSpan.Zero ? $"{Format(player.Position)} / {Format(player.Duration)}" : string.Empty;
+
+    /// <summary>
+    /// Plays the original music of <paramref name="item"/>, or the song converted for it (<paramref name="custom"/>).
+    /// Playing something else, or the same thing again, replaces what is playing.
+    /// </summary>
+    public async Task<OperationResult> PreviewAsync(MusicSlotItem item, bool custom)
+    {
+        if (!player.IsAvailable)
+            return Fail(t("custom_music.preview.unavailable"));
+        if (custom && item.Current == null)
+            return Ok();
+
+        HookPlayer();
+        ClearPreview();
+        var request = ++_previewRequest;
+        _previewItem = item;
+        _previewIsCustom = custom;
+        item.PreviewState = ItemPreviewState.Loading;
+        NotifyPlayback();
+
+        try
+        {
+            var loaded = custom ? await preview.LoadCustomAsync(item.Current!, _lifetime.Token) : await preview.LoadOriginalAsync(item.Slot, _lifetime.Token);
+            if (request != _previewRequest)
+                return Ok(); // something else was started meanwhile
+            if (loaded.IsFailure)
+            {
+                ClearPreview();
+                return loaded.Error;
+            }
+
+            player.Play(loaded.Value);
+            item.PreviewState = ItemPreviewState.Playing;
+            NotifyPlayback();
+            return Ok();
+        }
+        catch (OperationCanceledException)
+        {
+            return Ok(); // page closed
+        }
+        catch (Exception exception) when (exception is IOException or NotSupportedException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            if (request == _previewRequest)
+                ClearPreview();
+            return new OperationError { Message = t("custom_music.preview.failed", new { message = exception.Message }), Exception = exception };
+        }
+    }
+
+    public void StopPreview() => ClearPreview();
+
+    public void TogglePause()
+    {
+        if (_previewItem == null)
+            return;
+        if (player.State == PreviewState.Playing)
+            player.Pause();
+        else if (player.State == PreviewState.Paused)
+            player.Resume();
+    }
+
+    /// <summary>Jumps to a position in the song; <paramref name="fraction"/> is 0 (start) to 1 (end).</summary>
+    public void SeekTo(double fraction)
+    {
+        if (_previewItem != null && player.Duration > TimeSpan.Zero)
+            player.Seek(player.Duration * Math.Clamp(fraction, 0, 1));
+    }
+
+    private void StopPreviewOf(MusicSlotItem item, bool customOnly)
+    {
+        if (ReferenceEquals(_previewItem, item) && (!customOnly || _previewIsCustom))
+            ClearPreview();
+    }
+
+    private void ClearPreview()
+    {
+        _previewRequest++;
+        player.Stop();
+        var item = _previewItem;
+        _previewItem = null;
+        if (item != null)
+            item.PreviewState = ItemPreviewState.None;
+        NotifyPlayback();
+    }
+
+    private void HookPlayer()
+    {
+        if (_playerHooked)
+            return;
+        _playerHooked = true;
+        player.Changed += Player_Changed;
+    }
+
+    private void Player_Changed(object? sender, EventArgs e) => Dispatcher.UIThread.Post(OnPlayerChanged);
+
+    private void OnPlayerChanged()
+    {
+        if (_previewItem == null)
+            return;
+
+        // The song reached its end.
+        if (player.State == PreviewState.Stopped && !IsPreviewLoading)
+        {
+            ClearPreview();
+            return;
+        }
+
+        if (!IsPreviewLoading)
+        {
+            _previewItem.PreviewState = player.State == PreviewState.Paused ? ItemPreviewState.Paused : ItemPreviewState.Playing;
+        }
+
+        NotifyPlayback();
+    }
+
+    private void NotifyPlayback()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(NotifyPlayback);
+            return;
+        }
+
+        Notify(nameof(IsPlayerVisible));
+        Notify(nameof(IsPlaying));
+        Notify(nameof(IsPreviewLoading));
+        Notify(nameof(NowPlayingTitle));
+        Notify(nameof(NowPlayingKind));
+        Notify(nameof(PlaybackFraction));
+        Notify(nameof(PlaybackTime));
+    }
+
+    private static string Format(TimeSpan time) => $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+
+    #endregion
 
     private void RefreshModState()
     {
@@ -463,11 +681,12 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
 
     private void PersistPreferences()
     {
-        if (!_preferencesReady || _selectedSort == null || _selectedFinalLap == null)
+        if (!_preferencesReady || _selectedSort == null || _selectedFinalLap == null || _selectedVolume == null)
             return;
         var sort = _selectedSort.Mode;
         var finalLap = _selectedFinalLap.Style;
-        _ = Task.Run(() => service.SavePreferences(sort, finalLap));
+        var volume = _selectedVolume.Decibels;
+        _ = Task.Run(() => service.SavePreferences(sort, finalLap, volume));
     }
 
     private void NotifyState()
@@ -496,6 +715,12 @@ public sealed class CustomMusicViewModel(ICustomMusicService service) : INotifyP
 
     public void Dispose()
     {
+        if (_playerHooked)
+            player.Changed -= Player_Changed;
+        _playerHooked = false;
+        _previewRequest++;
+        player.Stop();
+        _previewItem = null;
         _lifetime.Cancel();
         foreach (var running in _conversions.Values)
             running.Cancel();

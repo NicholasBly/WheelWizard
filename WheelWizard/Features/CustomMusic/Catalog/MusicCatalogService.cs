@@ -102,7 +102,13 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
         }
 
         // Keys must be unique; duplicated creator names would otherwise collide.
-        return slots.GroupBy(slot => slot.Key).Select(group => group.First()).ToList();
+        var unique = slots.GroupBy(slot => slot.Key).Select(group => group.First()).ToList();
+
+        // Tracks that share a name (several "3DS" rows, say) get their file name appended so they can be told apart.
+        var duplicated = unique.GroupBy(slot => slot.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return unique
+            .Select(slot => duplicated.Contains(slot.Name) ? slot with { Name = $"{slot.Name} ({StripSuffix(slot.FileNames[0])})" } : slot)
+            .ToList();
     }
 
     private MusicSlot? BuildTrackSlot(
@@ -153,6 +159,9 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
                 ? $"Uses {musicCourse} music"
                 : null;
 
+        // The file name tells apart tracks whose names look alike.
+        detail = detail == null ? baseName : $"{detail} · {baseName}";
+
         string? gameFile = null;
         if (shipped == null && GameMusicCatalog.KeyForCourseId(track.MusicSlot) is { } slotKey)
             gameFile = gameFiles.GetValueOrDefault(slotKey);
@@ -173,6 +182,8 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
             SearchText = string.Join(' ', candidates.Append(cupName)),
         };
     }
+
+    private static string StripSuffix(string fileName) => fileName.EndsWith("_n.brstm", StringComparison.OrdinalIgnoreCase) ? fileName[..^8] : fileName;
 
     private static bool IsUsableFileName(string name) =>
         name.Length is > 0 and <= 48 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) < 0;

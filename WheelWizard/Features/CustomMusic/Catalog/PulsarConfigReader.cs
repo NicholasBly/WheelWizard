@@ -138,7 +138,6 @@ public static class PulsarConfigReader
         return result;
     }
 
-    /// <summary>Track names carry a coloured version suffix ("Track\c{red3} v2\c{off}"); keep the part before it.</summary>
     private static string CleanName(string name) => name.Trim();
 }
 
@@ -225,9 +224,8 @@ public static class BmgReader
                     if (position + 2 >= data.Length)
                         break;
                     var length = data[position + 2];
-                    // A colour escape starts the coloured version suffix: stop the name there.
-                    if (builder.Length > 0)
-                        break;
+                    // Colour and icon escapes are dropped but the text around them is kept: names like
+                    // "<red>3DS<off> Toad Circuit" or "Track<red> v2<off>" must not be cut at the first escape.
                     position += Math.Max(4, length + (length % 2));
                     continue;
                 }
@@ -243,6 +241,6 @@ public static class BmgReader
             builder.Append(encoding == 4 ? Encoding.UTF8.GetString(slice) : Encoding.Latin1.GetString(slice));
         }
 
-        return builder.ToString().Trim();
+        return System.Text.RegularExpressions.Regex.Replace(builder.ToString(), @"\s+", " ").Trim();
     }
 }

@@ -13,8 +13,8 @@ public interface ICustomMusicService
 
     CustomMusicLibraryData LoadLibrary();
 
-    /// <summary>Persists view preferences (sort order, final lap style) without touching saved music.</summary>
-    void SavePreferences(MusicSortMode sortMode, FinalLapStyle finalLapStyle);
+    /// <summary>Persists view preferences (sort order, final lap style, volume adjustment) without touching saved music.</summary>
+    void SavePreferences(MusicSortMode sortMode, FinalLapStyle finalLapStyle, double volumeOffsetDb);
 
     /// <summary>Converts <paramref name="sourcePath"/> into BRSTM(s) for <paramref name="slot"/>. Nothing is installed until <see cref="SaveAsync"/>.</summary>
     Task<OperationResult<CustomMusicEntry>> ConvertAsync(
@@ -66,11 +66,11 @@ public sealed class CustomMusicService(
         }
     }
 
-    public void SavePreferences(MusicSortMode sortMode, FinalLapStyle finalLapStyle)
+    public void SavePreferences(MusicSortMode sortMode, FinalLapStyle finalLapStyle, double volumeOffsetDb)
     {
         lock (_libraryLock)
         {
-            var data = library.Load() with { SortMode = sortMode, FinalLapStyle = finalLapStyle };
+            var data = library.Load() with { SortMode = sortMode, FinalLapStyle = finalLapStyle, VolumeOffsetDb = volumeOffsetDb };
             var result = library.Save(data);
             if (result.IsFailure)
                 logger.LogWarning("Could not save custom music preferences: {Message}", result.Error.Message);
@@ -103,8 +103,10 @@ public sealed class CustomMusicService(
                 Loop = reference.Loops ?? slot.Loops,
                 CreateFinalLap = slot.HasFinalLap,
                 FinalLapStyle = finalLapStyle,
+                // Match the loudness of the original file and carry its volume byte, so both play at the same level.
                 TargetLufs = reference.Lufs,
                 VolumeOffsetDb = volumeOffsetDb,
+                PulsarVolume = reference.PulsarVolume,
             };
 
             var conversionProgress = progress == null ? null : new Progress<double>(value => progress.Report(0.25 + value * 0.73));
@@ -142,6 +144,8 @@ public sealed class CustomMusicService(
                 TargetLufs = result.Report.TargetLufs,
                 VolumeOffsetDb = volumeOffsetDb,
                 ReferenceSource = reference.Source,
+                ReferenceNote = reference.Source == MusicReferenceSource.Estimate ? reference.Problem : null,
+                PulsarVolume = reference.PulsarVolume,
                 FinalLapStyle = finalLapStyle,
                 DurationSeconds = result.Report.Duration.TotalSeconds,
                 UsedSourceLoopPoints = result.Report.UsedSourceLoopPoints,

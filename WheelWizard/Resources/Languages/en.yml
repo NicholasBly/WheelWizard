@@ -802,15 +802,33 @@ en:
     loudness:
       label: "Volume matching"
       help: "Every song is matched (EBU R128 loudness) to the music it replaces, measured from your Retro Rewind files or your own game disc, so nothing is suddenly louder or quieter than the original."
+    volume:
+      label: "Volume of new songs"
+      help: "Added on top of the matching, for songs you add from now on. Use the row's menu (Louder / Quieter) to adjust a song you already added."
+      quieter: "Quieter (-3 dB)"
+      same: "Same as the original"
+      louder: "Louder (+3 dB)"
+      much_louder: "Much louder (+6 dB)"
+      loudest: "Loudest (+9 dB)"
+    volume_estimated: "volume estimated"
     reference:
       retro_rewind: "Retro Rewind's version"
       game_disc: "your game disc"
-      estimate: "typical game music"
+      estimate: "a typical volume, the original couldn't be measured"
+    reference_problem:
+      unreadable_file: "%{file} couldn't be read as music."
+    disc:
+      not_set: "No game disc is set in Wheel Wizard's settings, so the original music can't be read."
+      missing: "The game disc set in Wheel Wizard's settings can't be found."
+      no_file: "The game disc has no file named %{file}."
+      unreadable: "The game disc couldn't be read (%{message})."
     details:
       final_lap: "Final lap: %{file}"
       source: "Song: %{file}"
       loudness: "Loudness %{source} LUFS → %{target} LUFS (matched to %{reference})"
       loop_points: "Uses the loop points stored in the file"
+      volume_offset: "Volume adjusted by %{amount} dB"
+      reference_problem: "Volume not matched: %{message}"
     category:
       retro_rewind: "Retro Rewind"
       retro_rewind_arenas: "Retro Rewind arenas"
@@ -830,10 +848,27 @@ en:
       unreadable: "Couldn't read Retro Rewind's track list. Its tracks are missing below; the original game's music still works."
     menu:
       choose: "Choose song…"
+      play_original: "Play original music"
+      play_custom: "Play your song"
+      louder: "Louder (+2 dB)"
+      quieter: "Quieter (-2 dB)"
       undo: "Undo change"
       reset: "Back to original music"
       show_source: "Show song file"
       more: "More options"
+    preview:
+      play_tip: "Play the original music"
+      stop_tip: "Stop"
+      pause_tip: "Pause"
+      resume_tip: "Play"
+      loading: "Loading…"
+      original: "Original music"
+      your_song: "Your song"
+      unavailable: "This computer has no audio player Wheel Wizard can use. On Linux, install PulseAudio, PipeWire, ALSA or FFmpeg."
+      no_original: "The original music of this entry isn't a file that can be played."
+      needs_disc: "Set your Mario Kart Wii disc in Wheel Wizard's settings to play the original music."
+      song_missing: "The converted song can't be found anymore. Choose the song again."
+      failed: "Couldn't play the music: %{message}"
     empty:
       title: "No matching music"
       body: "Try a different search."
