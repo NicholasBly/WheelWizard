@@ -73,10 +73,10 @@ jobs:
           --configuration Release
           --output publish/win-x64
           --self-contained true
-          /p:UseAppHost=true
-          /p:PublishSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
-          /p:EnableCompressionInSingleFile=true
+          -p:UseAppHost=true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
 
       # Uploaded as the plain .exe (no zip to extract).
       - name: Upload WheelWizard.exe
