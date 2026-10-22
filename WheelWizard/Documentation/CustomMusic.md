@@ -62,9 +62,25 @@ block-aligned loops, the same layout as Nintendo's files and VGAudio's.
    row shows the adjustment, and the tooltip shows the loudness reached. A song whose peaks are already at the limit
    cannot get louder without distorting; the page says so instead of silently squashing it further. WiiCompiled has
    its own *Music* volume slider in its settings, which scales all music.
-4. **Looping.** Loop points in the file are kept: WAV `smpl` chunks, or `LOOPSTART`/`LOOPLENGTH` tags. Without them the
-   end of the song is crossfaded into the start so the loop has no gap. Loop points shorter than a second are ignored
-   (the game would repeat a tiny fragment as a buzz). Jingles such as start fanfares play once.
+4. **Looping.** Loop points in the file are kept: WAV `smpl` chunks, `LOOPSTART`/`LOOPLENGTH` tags, or a BRSTM's own
+   loop. Without them, Wheel Wizard looks for a loop in the music itself: most songs repeat a section, so playback can
+   jump from a late repeat back to an earlier one without anyone hearing the cut.
+   - The song is cut into 64 ms frames, each described by its energy in 24 frequency bands (log-spaced, ~60 Hz up).
+   - For every loop length of at least 12 seconds, each frame is compared with the frame that far earlier (cosine
+     similarity of the band shapes, minus a penalty per dB of level difference so a fade-out never matches the full
+     version, with silence never matching). The jump point needs about 3 seconds of matching music on both sides.
+   - Of the jump points that match well enough (similarity ≥ 0.95), longer loops and later jumps win, so as much of
+     the song as possible is heard before it repeats.
+   - The frame-level guess is refined to the exact sample by cross-correlating the waveforms around both points, and
+     the last 30 ms before the jump are blended into the audio before the loop start so the waveform continues
+     without a click.
+
+   Songs that do not repeat cleanly (or are too short) fall back to a crossfade: the ending fades into the opening and
+   the loop restarts right after that opening. Either way the loop start is then moved onto a BRSTM block boundary
+   (the audio that follows is appended to the loop end, so the loop is unchanged) because the game can only jump to
+   the start of a block. Loop points shorter than a second are ignored (the game would repeat a tiny fragment as a
+   buzz). Jingles such as start fanfares play once. The row's tooltip shows where the loop came from and where it
+   starts and ends.
 5. **Encoding.** The song is resampled to 32 kHz and encoded to DSP-ADPCM BRSTM.
 
 ## Previewing music
@@ -77,8 +93,33 @@ installed. A player bar at the bottom shows progress (click it to jump to a poin
 Playback uses the operating system directly: Windows' `PlaySound`, `afplay` on macOS, and on Linux the first of
 `paplay`, `pw-play`, `aplay`, `ffplay`, `play` or `mpv` that is installed. Music is stopped when you leave the page.
 
-Tracks whose names look the same (several "3DS" entries, say) show their file name next to the description, and get it
+Tracks whose names look alike show their file name next to the description, and get it
 appended to the name when the names are identical.
+
+## Same course, several consoles
+
+Retro Rewind has many versions of some courses ("SNES Rainbow Road", "N64 Rainbow Road", "Rainbow Road", ...). Rows
+whose names match once the console tag, version suffix (`v2`) and notes in brackets are removed form a family, and the
+row menu offers *Use for all N Rainbow Road tracks*: the row's song (or a newly picked one) is converted for every
+member, each matched to the loudness of its own original.
+
+## Music packs
+
+Music packs are usually zips of BRSTM files named after the game's music (`n_Circuit32_n.brstm`, ...).
+
+- **Installed as a patch.** A pack added on the Patches page (and enabled) shows on the rows it replaces ("Music from
+  <pack>"), and the play button plays the pack's version. When two packs provide the same file, the one with the
+  higher priority is shown, as in game. A song chosen here still wins, because the Custom Music patch has the highest
+  priority.
+- **Dropped on the page.** Dropping a pack's zip (or a folder) on the page extracts its audio files into the library and
+  matches them to their tracks by file name; BRSTMs keep their loop points and are loudness-matched like any song.
+  Archives over 4 GB are refused.
+
+Files extracted straight into Retro Rewind's own `Patches` folder are not seen: Wheel Wizard replaces that folder's
+contents with the enabled patches when it launches the game, so packs should be added on the Patches page.
+
+**Remove all custom music** (gear menu) puts every row back to its original music; like every change, it only takes
+effect when saved.
 
 ## Saving
 
@@ -92,39 +133,19 @@ Pressing **Save** writes the converted files into a patch called **Custom Music*
 The library (which song belongs to which row, plus the converted files) is stored in Wheel Wizard's data folder under
 `CustomMusic/`, so nothing is lost when Retro Rewind updates.
 
-## Building a test version
+## Development
 
-**Option A: let GitHub build it.** Every push to the `music` branch runs the *Custom Music test build* workflow
-(`.github/workflows/music-build.yml`).
-
-1. Open the repository's **Actions** tab and select the latest run.
-2. Download **WheelWizard-music-windows-x64** from the run's *Artifacts* section and unzip it.
-3. Run `WheelWizard.exe`. It is self-contained, so .NET does not need to be installed. If Windows SmartScreen warns
-   about an unknown publisher, choose *More info → Run anyway*.
-
-You can start a build by hand with *Run workflow* on that page.
-
-**Option B: build it on your PC.**
-
-1. Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) and Git.
-2. Get the branch and publish it:
-
-   ```powershell
-   git clone -b music https://github.com/NicholasBly/WheelWizard.git
-   cd WheelWizard
-   dotnet publish WheelWizard/WheelWizard.csproj -r win-x64 -c Release --self-contained true -o publish /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:EnableCompressionInSingleFile=true
-   ```
-
-3. Run `publish\WheelWizard.exe`.
-
-To run straight from source while developing, use `dotnet run --project WheelWizard`. Run the tests with `dotnet test`;
-the custom music tests are in `WheelWizard.Test/Features/CustomMusic`.
+Run from source with `dotnet run --project WheelWizard`, and the tests with `dotnet test`; the custom music tests are in
+`WheelWizard.Test/Features/CustomMusic`. Nothing in the feature is platform specific apart from preview playback (see
+above): file names are compared case-insensitively, paths are built with the file system abstraction, and FFmpeg is
+looked up on `PATH` (plus Homebrew's folders on macOS).
 
 ## Code map
 
 | Folder | Contents |
 | --- | --- |
-| `Features/CustomMusic/Audio` | Decoders, tag readers, loudness meter, resampler, limiter, DSP-ADPCM encoder, BRSTM reader and writer, `MusicConverter` |
-| `Features/CustomMusic/Catalog` | Original game music list, Pulsar config and BMG reader, Retro Rewind track discovery |
-| `Features/CustomMusic/Library` | Saved songs (`library.json`), reference loudness, game disc reader, the installer that writes the patch |
+| `Features/CustomMusic/Audio` | Decoders, tag readers, loudness meter, resampler, limiter, DSP-ADPCM encoder, BRSTM reader and writer, loop finder, `MusicConverter` |
+| `Features/CustomMusic/Catalog` | Original game music list, Pulsar config and BMG reader, Retro Rewind track discovery, course families |
+| `Features/CustomMusic/Library` | Saved songs (`library.json`), reference loudness, game disc reader, music pack import, the installer that writes the patch |
+| `Features/CustomMusic/Playback` | Preview player and the per-platform audio output |
 | `Features/CustomMusic/ViewModels`, `Views` | The page |

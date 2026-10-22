@@ -122,6 +122,39 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
         await AssignAsync(item, files[0]);
     }
 
+    /// <summary>One song for every console's version of a course: the row's own song if it has one, otherwise a new pick.</summary>
+    private async void UseForFamily_Click(object? sender, RoutedEventArgs e)
+    {
+        if (ItemFrom(sender) is not { HasFamily: true } item)
+            return;
+
+        var path = item.Current?.SourcePath;
+        if (path == null || !_model.SongFileExists(path))
+        {
+            var title = t("custom_music.pick_title", new { name = item.FamilyMenuText });
+            var files = await _filePicker.OpenFilePickerAsync(AudioFiles, allowMultiple: false, title: title);
+            if (files.Count == 0)
+                return;
+            path = files[0];
+        }
+
+        var result = await _model.AssignToFamilyAsync(item, path, item.Current?.SourcePath == path ? item.Current.VolumeOffsetDb : null);
+        if (result.IsFailure)
+            ViewUtils.ShowSnackbar(result.Error.Message, ViewUtils.SnackbarType.Warning);
+    }
+
+    private async void ResetAll_Click(object? sender, RoutedEventArgs e)
+    {
+        var confirmed = await new YesNoWindow()
+            .SetMainText(t("custom_music.reset_all.title"))
+            .SetExtraText(t("custom_music.reset_all.extra", new { amount = _model.CustomCount }))
+            .SetButtonText(t("custom_music.reset_all.confirm"), t("custom_music.leave.stay"))
+            .SetButtonTones(ActionButtonTone.Danger, ActionButtonTone.Secondary)
+            .AwaitAnswer();
+        if (confirmed)
+            _model.ResetAll();
+    }
+
     private void UndoChange_Click(object? sender, RoutedEventArgs e)
     {
         if (ItemFrom(sender) is { } item)
@@ -262,23 +295,42 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
     {
         var target = TargetFrom(e);
         EndDrag();
-        var files = GetDroppedFiles(e);
-        if (files.Length == 0)
+        var dropped = GetDroppedFiles(e);
+        if (dropped.Length == 0)
             return;
         e.Handled = true;
 
-        if (target != null)
+        // A single song on a row replaces that row; folders and music packs (.zip) are matched by file name.
+        var isSingleSong = dropped.Length == 1 && AudioFileDecoder.IsSupportedExtension(dropped[0]);
+        if (target != null && isSingleSong)
         {
-            if (files.Length > 1)
-                ViewUtils.ShowSnackbar(t("custom_music.drop_first_only"), ViewUtils.SnackbarType.Warning);
-            await AssignAsync(target, files[0]);
+            await AssignAsync(target, dropped[0]);
             return;
         }
 
-        // Dropped outside a row: files named after game music (an existing BRSTM pack) find their slot by name.
+        var expanded = await _model.ExpandDropAsync(dropped);
+        if (expanded.IsFailure)
+        {
+            ViewUtils.ShowSnackbar(expanded.Error.Message, ViewUtils.SnackbarType.Warning);
+            return;
+        }
+
+        var files = expanded.Value.ToArray();
+        if (files.Length == 0)
+            return;
+
+        // Files named after game music (n_Circuit32_n.brstm, as music packs ship them) find their track by name.
         var matches = _model.MatchByFileName(files);
         if (matches.Count == 0)
         {
+            if (target != null)
+            {
+                if (files.Length > 1)
+                    ViewUtils.ShowSnackbar(t("custom_music.drop_first_only"), ViewUtils.SnackbarType.Warning);
+                await AssignAsync(target, files[0]);
+                return;
+            }
+
             new MessageBoxWindow()
                 .SetMessageType(MessageBoxWindow.MessageType.Message)
                 .SetTitleText(t("custom_music.drop_on_row.title"))
@@ -287,7 +339,7 @@ public partial class CustomMusicPage : UserControl, INavigationGuard
             return;
         }
 
-        ViewUtils.ShowSnackbar(t("custom_music.matched_files", matches.Count));
+        ViewUtils.ShowSnackbar(t("custom_music.matched_files", new { matched = matches.Count, total = files.Length }));
         await Task.WhenAll(matches.Select(match => AssignAsync(match.Item, match.Path)));
     }
 

@@ -22,6 +22,9 @@ public enum CustomMusicModState
 /// <summary>A file of ours that another enabled patch with higher priority also provides (theirs wins).</summary>
 public sealed record MusicConflict(string FileName, string ModTitle);
 
+/// <summary>A music file another enabled patch (a music pack) puts in the game.</summary>
+public sealed record PackMusic(string ModTitle, string Path);
+
 public interface ICustomMusicInstaller
 {
     CustomMusicModState GetState();
@@ -36,6 +39,12 @@ public interface ICustomMusicInstaller
 
     /// <summary>Other enabled patches that would override some of our music files.</summary>
     IReadOnlyList<MusicConflict> FindConflicts();
+
+    /// <summary>
+    /// Music files that other enabled patches (music packs) put in the game, by file name (case-insensitive),
+    /// resolved the way they are copied at launch: when two packs have the same file, the higher priority wins.
+    /// </summary>
+    IReadOnlyDictionary<string, PackMusic> FindPackMusic();
 }
 
 public sealed class CustomMusicInstaller(IModManager mods, IModPaths modPaths, IFileSystem fileSystem, ILogger<CustomMusicInstaller> logger)
@@ -121,6 +130,20 @@ public sealed class CustomMusicInstaller(IModManager mods, IModPaths modPaths, I
         }
 
         return conflicts;
+    }
+
+    public IReadOnlyDictionary<string, PackMusic> FindPackMusic()
+    {
+        var ours = FindMod();
+        var music = new Dictionary<string, PackMusic>(StringComparer.OrdinalIgnoreCase);
+        // The list runs from highest to lowest priority; going backwards lets higher priorities overwrite.
+        foreach (var mod in mods.Mods.Reverse().Where(m => m.IsEnabled && !ReferenceEquals(m, ours)))
+        {
+            foreach (var file in ListBrstmFiles(modPaths.GetModDirectoryPath(mod.Title)))
+                music[fileSystem.Path.GetFileName(file)] = new PackMusic(mod.Title, file);
+        }
+
+        return music;
     }
 
     private OperationResult WriteFiles(string folder, string title, IReadOnlyCollection<InstalledMusic> music, CancellationToken cancellationToken)

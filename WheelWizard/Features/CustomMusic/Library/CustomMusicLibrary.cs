@@ -1,4 +1,5 @@
 using System.IO.Abstractions;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -49,13 +50,13 @@ public sealed record CustomMusicEntry
     public double TargetLufs { get; init; }
     public double VolumeOffsetDb { get; init; }
 
-    /// <summary>Loudness of the original music file (null for songs converted by older versions).</summary>
+    /// <summary>Loudness of the original music file (null when it was not recorded).</summary>
     public double? ReferenceLufs { get; init; }
 
     /// <summary>Volume byte of the original music file (0 = none).</summary>
     public byte ReferenceVolume { get; init; }
 
-    /// <summary>Loudness of the converted file (null for songs converted by older versions).</summary>
+    /// <summary>Loudness of the converted file (null when it was not recorded).</summary>
     public double? OutputLufs { get; init; }
     public MusicReferenceSource ReferenceSource { get; init; }
 
@@ -67,7 +68,12 @@ public sealed record CustomMusicEntry
 
     public FinalLapStyle FinalLapStyle { get; init; }
     public double DurationSeconds { get; init; }
-    public bool UsedSourceLoopPoints { get; init; }
+    public LoopKind Loop { get; init; }
+
+    /// <summary>Where the loop starts and ends in the converted song, in seconds (0 when it does not loop).</summary>
+    public double LoopStartSeconds { get; init; }
+
+    public double LoopEndSeconds { get; init; }
 
     public string NormalFile { get; init; } = "normal.brstm";
     public string? FinalLapFile { get; init; }
@@ -77,7 +83,7 @@ public sealed record CustomMusicEntry
 
     /// <summary>
     /// How much louder (positive) or quieter the song plays in game than the original, in dB, counting the volume
-    /// bytes of both. Null when this was converted by an older version that did not record it.
+    /// bytes of both. Null when either loudness is unknown.
     /// </summary>
     [JsonIgnore]
     public double? LoudnessVersusOriginalDb =>
@@ -111,8 +117,13 @@ public interface ICustomMusicLibrary
 
     string GetStorageFolder(string storageId);
 
-    /// <summary>Removes converted files that no saved entry (and no pending one) refers to any more.</summary>
-    void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse);
+    /// <summary>
+    /// Removes converted files and extracted music packs that none of <paramref name="entriesInUse"/> refers to.
+    /// </summary>
+    void DeleteUnused(IEnumerable<CustomMusicEntry> entriesInUse);
+
+    /// <summary>Extracts the audio files of a music pack (.zip) into the library and returns their paths.</summary>
+    OperationResult<IReadOnlyList<string>> ExtractPack(string zipPath, CancellationToken cancellationToken = default);
 }
 
 public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataLocation applicationData, ILogger<CustomMusicLibrary> logger)
@@ -128,6 +139,10 @@ public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataL
     public string RootFolderPath => fileSystem.Path.Combine(applicationData.DirectoryPath, "CustomMusic");
     private string LibraryFilePath => fileSystem.Path.Combine(RootFolderPath, "library.json");
     private string StorageRootPath => fileSystem.Path.Combine(RootFolderPath, "Converted");
+    private string PacksRootPath => fileSystem.Path.Combine(RootFolderPath, "Packs");
+
+    /// <summary>Largest music pack accepted, so a wrong archive cannot fill the disk.</summary>
+    private const long MaxPackBytes = 4L * 1024 * 1024 * 1024;
 
     public CustomMusicLibraryData Load()
     {
@@ -190,24 +205,88 @@ public sealed class CustomMusicLibrary(IFileSystem fileSystem, IApplicationDataL
 
     private static bool IsPlainFileName(string? name) => name != null && PathText.IsValidFileName(name);
 
-    public void DeleteUnusedStorage(IEnumerable<string> storageIdsInUse)
+    public void DeleteUnused(IEnumerable<CustomMusicEntry> entriesInUse)
     {
-        if (!fileSystem.Directory.Exists(StorageRootPath))
-            return;
+        var entries = entriesInUse.ToList();
+        var storage = entries.Select(entry => entry.StorageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        DeleteFoldersExcept(StorageRootPath, folder => storage.Contains(fileSystem.Path.GetFileName(folder)));
 
-        var keep = new HashSet<string>(storageIdsInUse, StringComparer.OrdinalIgnoreCase);
-        foreach (var folder in fileSystem.Directory.EnumerateDirectories(StorageRootPath))
+        // A pack folder stays while any song in use was taken from it.
+        var sources = entries.Select(entry => fileSystem.Path.GetFullPath(entry.SourcePath)).ToList();
+        DeleteFoldersExcept(
+            PacksRootPath,
+            folder =>
+            {
+                var prefix = fileSystem.Path.GetFullPath(folder) + fileSystem.Path.DirectorySeparatorChar;
+                return sources.Any(source => source.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            }
+        );
+    }
+
+    public OperationResult<IReadOnlyList<string>> ExtractPack(string zipPath, CancellationToken cancellationToken = default)
+    {
+        var folder = fileSystem.Path.Combine(PacksRootPath, $"{PathText.FileNameWithoutExtension(zipPath)}-{Guid.NewGuid():N}"[..^24]);
+        try
         {
-            if (keep.Contains(fileSystem.Path.GetFileName(folder)))
-                continue;
-            try
+            using var stream = fileSystem.File.OpenRead(zipPath);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+            var extracted = new List<string>();
+            long total = 0;
+            fileSystem.Directory.CreateDirectory(folder);
+            foreach (var entry in archive.Entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Packs mirror the game's folders (sound/strm/...); only the file name matters for matching, and
+                // flattening it also keeps entries like "../x" from leaving the folder.
+                var name = PathText.FileName(entry.FullName);
+                if (!AudioFileDecoder.IsSupportedExtension(name) || !PathText.IsValidFileName(name) || entry.Length > AudioFileDecoder.MaxFileSize)
+                    continue;
+                total += entry.Length;
+                if (total > MaxPackBytes)
+                    break;
+
+                var target = fileSystem.Path.Combine(folder, name);
+                if (fileSystem.File.Exists(target))
+                    continue; // the same song in two folders of the pack
+                using (var input = entry.Open())
+                using (var output = fileSystem.File.Create(target))
+                    input.CopyTo(output);
+                extracted.Add(target);
+            }
+
+            if (extracted.Count == 0)
                 fileSystem.Directory.Delete(folder, recursive: true);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                logger.LogDebug(exception, "Could not remove unused custom music files in {Folder}.", folder);
-            }
+            return extracted;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            DeleteQuietly(folder);
+            logger.LogWarning(exception, "Could not extract the music pack {Pack}.", zipPath);
+            return new OperationError { Message = t("custom_music.error.pack", new { message = exception.Message }), Exception = exception };
+        }
+    }
+
+    private void DeleteFoldersExcept(string root, Func<string, bool> keep)
+    {
+        if (!fileSystem.Directory.Exists(root))
+            return;
+        foreach (var folder in fileSystem.Directory.EnumerateDirectories(root))
+        {
+            if (!keep(folder))
+                DeleteQuietly(folder);
+        }
+    }
+
+    private void DeleteQuietly(string folder)
+    {
+        try
+        {
+            if (fileSystem.Directory.Exists(folder))
+                fileSystem.Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            logger.LogDebug(exception, "Could not remove unused custom music files in {Folder}.", folder);
         }
     }
 }

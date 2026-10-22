@@ -187,6 +187,7 @@ public sealed class CustomMusicViewModel(
     }
 
     public int CustomCount => _items.Count(item => item.IsCustom);
+    public bool HasCustomMusic => CustomCount > 0;
     public int PendingCount => _items.Count(item => item.IsPending);
     public bool HasPendingChanges => PendingCount > 0;
     public bool IsConverting => _items.Any(item => item.IsProcessing);
@@ -288,6 +289,9 @@ public sealed class CustomMusicViewModel(
                 item.PropertyChanged += Item_PropertyChanged;
                 _items.Add(item);
             }
+
+            AssignFamilies();
+            await RefreshPacksAsync();
 
             // Songs for tracks Retro Rewind no longer has are kept, so they come back if the track returns.
             _orphanedEntries = entries.Values.ToList();
@@ -435,6 +439,56 @@ public sealed class CustomMusicViewModel(
         return VolumeChange.Changed;
     }
 
+    /// <summary>
+    /// Converts one song for every row in <paramref name="item"/>'s family (all the Rainbow Roads, say). Each track
+    /// is matched to its own original's loudness.
+    /// </summary>
+    public async Task<OperationResult> AssignToFamilyAsync(MusicSlotItem item, string path, double? volumeOffsetDb = null)
+    {
+        var results = await Task.WhenAll(item.Family.Select(member => AssignAsync(member, path, volumeOffsetDb)));
+        var failures = results.Count(result => result.IsFailure);
+        return failures == 0 ? Ok() : Fail(t("custom_music.error.family", new { failed = failures, amount = results.Length }));
+    }
+
+    /// <summary>
+    /// Turns dropped files and folders into songs to match by file name: folders are searched, and music packs
+    /// (.zip) are extracted into the library first.
+    /// </summary>
+    public async Task<OperationResult<IReadOnlyList<string>>> ExpandDropAsync(IEnumerable<string> paths)
+    {
+        var songs = new List<string>();
+        foreach (var path in paths)
+        {
+            if (fileSystem.Directory.Exists(path))
+            {
+                songs.AddRange(
+                    await Task.Run(() => fileSystem.Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Where(AudioFileDecoder.IsSupportedExtension).ToList())
+                );
+            }
+            else if (PathText.Extension(path) == ".zip")
+            {
+                var extracted = await service.ExtractPackAsync(path, _lifetime.Token);
+                if (extracted.IsFailure)
+                    return extracted.Error;
+                songs.AddRange(extracted.Value);
+            }
+            else
+            {
+                songs.Add(path);
+            }
+        }
+
+        return songs;
+    }
+
+    /// <summary>Puts every row back to its original music (pending until saved).</summary>
+    public void ResetAll()
+    {
+        foreach (var item in _items.Where(item => item.IsCustom || item.IsProcessing).ToList())
+            ResetToOriginal(item);
+        NotifyState();
+    }
+
     /// <summary>Back to the original game / Retro Rewind music (after saving).</summary>
     public void ResetToOriginal(MusicSlotItem item)
     {
@@ -517,6 +571,7 @@ public sealed class CustomMusicViewModel(
         _previewItem == null ? string.Empty
         : IsPreviewLoading ? t("custom_music.preview.loading")
         : _previewIsCustom ? t("custom_music.preview.your_song")
+        : _previewItem.Pack is { } pack ? t("custom_music.preview.pack", new { pack = pack.ModTitle })
         : t("custom_music.preview.original");
 
     public double PlaybackFraction => player.Duration > TimeSpan.Zero ? Math.Clamp(player.Position / player.Duration, 0, 1) : 0;
@@ -543,7 +598,9 @@ public sealed class CustomMusicViewModel(
 
         try
         {
-            var loaded = custom ? await preview.LoadCustomAsync(item.Current!, _lifetime.Token) : await preview.LoadOriginalAsync(item.Slot, _lifetime.Token);
+            var loaded = custom ? await preview.LoadCustomAsync(item.Current!, _lifetime.Token)
+                : item.Pack is { } pack ? await preview.LoadFileAsync(pack.Path, _lifetime.Token)
+                : await preview.LoadOriginalAsync(item.Slot, _lifetime.Token);
             if (request != _previewRequest)
                 return Ok(); // something else was started meanwhile
             if (loaded.IsFailure)
@@ -680,6 +737,8 @@ public sealed class CustomMusicViewModel(
         }
     }
 
+    public bool SongFileExists(string path) => fileSystem.File.Exists(path);
+
     /// <summary>The folder holding the song file of <paramref name="item"/>, or null when it is gone.</summary>
     public string? SourceFolderOf(MusicSlotItem item)
     {
@@ -687,6 +746,33 @@ public sealed class CustomMusicViewModel(
             return null;
         var folder = fileSystem.Path.GetDirectoryName(entry.SourcePath);
         return !string.IsNullOrEmpty(folder) && fileSystem.Directory.Exists(folder) ? folder : null;
+    }
+
+    /// <summary>Links rows that are the same course on different consoles, so one song can go to all of them.</summary>
+    private void AssignFamilies()
+    {
+        var families = _items
+            .Where(item => item.Slot.Category is MusicCategory.RetroRewindTrack or MusicCategory.Course or MusicCategory.RetroRewindArena or MusicCategory.Arena)
+            .GroupBy(item => TrackNames.FamilyKey(item.Slot.Name) ?? item.Slot.Key)
+            .Where(group => group.Count() > 1);
+        foreach (var family in families)
+        {
+            var members = family.OrderBy(item => item.Slot.Order).ToList();
+            var name = TrackNames.DisplayFamily(members[0].Slot.Name) ?? members[0].Name;
+            foreach (var member in members)
+            {
+                member.Family = members;
+                member.FamilyName = name;
+            }
+        }
+    }
+
+    /// <summary>Notes which rows get their music from a music pack installed on the Patches page.</summary>
+    private async Task RefreshPacksAsync()
+    {
+        var packs = await Task.Run(service.FindPackMusic);
+        foreach (var item in _items)
+            item.Pack = item.Slot.FileNames.Select(name => packs.GetValueOrDefault(name)).FirstOrDefault(pack => pack != null);
     }
 
     private Bitmap? LoadCover(CustomMusicEntry entry)
@@ -853,6 +939,7 @@ public sealed class CustomMusicViewModel(
         }
 
         Notify(nameof(CustomCount));
+        Notify(nameof(HasCustomMusic));
         Notify(nameof(PendingCount));
         Notify(nameof(HasPendingChanges));
         Notify(nameof(IsConverting));

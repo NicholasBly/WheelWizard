@@ -106,7 +106,7 @@ public sealed class MusicCatalogService(IFileSystem fileSystem, ICustomDistribut
         // Keys must be unique; duplicated creator names would otherwise collide.
         var unique = slots.GroupBy(slot => slot.Key).Select(group => group.First()).ToList();
 
-        // Tracks that share a name (several "3DS" rows, say) get their file name appended so they can be told apart.
+        // Tracks that share a name get their file name appended so they can be told apart.
         var duplicated = unique.GroupBy(slot => slot.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         return unique
             .Select(slot => duplicated.Contains(slot.Name) ? slot with { Name = $"{slot.Name} ({StripSuffix(slot.FileNames[0])})" } : slot)

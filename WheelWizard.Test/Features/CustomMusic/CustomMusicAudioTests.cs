@@ -7,6 +7,7 @@ using WheelWizard.CustomMusic.Audio.Codecs;
 using WheelWizard.CustomMusic.Audio.Dsp;
 using WheelWizard.CustomMusic.Audio.Formats;
 using WheelWizard.CustomMusic.Audio.Tags;
+using WheelWizard.CustomMusic.Catalog;
 
 namespace WheelWizard.Test.Features.CustomMusic;
 
@@ -190,7 +191,7 @@ public class CustomMusicAudioTests
         var result = MusicConverter.Convert(song, new ConversionOptions());
         var info = BrstmReader.ReadInfo(result.Normal);
 
-        Assert.True(result.Report.UsedSourceLoopPoints);
+        Assert.True(result.Report.Loop == LoopKind.FromFile);
         // The loop start moves forward onto a block boundary and the end moves with it: same loop length.
         Assert.Equal(32000 * 6, info.SampleCount - info.LoopStart);
     }
@@ -254,7 +255,7 @@ public class CustomMusicAudioTests
 
         var result = MusicConverter.Convert(song, new ConversionOptions());
 
-        Assert.False(result.Report.UsedSourceLoopPoints);
+        Assert.False(result.Report.Loop == LoopKind.FromFile);
         var info = BrstmReader.ReadInfo(result.Normal);
         Assert.True(info.SampleCount - info.LoopStart > 32000 * 5);
     }
@@ -362,6 +363,60 @@ public class CustomMusicAudioTests
     [InlineData("..", false)]
     [InlineData("", false)]
     public void PathText_KnowsValidFileNames(string name, bool valid) => Assert.Equal(valid, PathText.IsValidFileName(name));
+
+    [Fact]
+    public void LoopFinder_FindsTheRepeatAndSplicesItWithoutAJump()
+    {
+        // Intro, then verse and chorus twice, then an outro: the loop should jump from the second verse-chorus
+        // back to the first, exactly one cycle (32 s) long.
+        var rate = 32000;
+        float[] song = [.. Section(1, 6), .. Section(2, 16), .. Section(3, 16), .. Section(2, 16), .. Section(3, 16), .. Section(4, 8)];
+        var audio = new AudioBuffer([song, (float[])song.Clone()], rate);
+
+        var loop = LoopFinder.Find(audio);
+
+        Assert.NotNull(loop);
+        Assert.InRange((loop.Value.End - loop.Value.Start) / (double)rate, 31.99, 32.01);
+        Assert.True(loop.Value.Similarity > LoopFinder.MinSimilarity);
+        var looped = LoopFinder.Apply(audio, loop.Value);
+        var channel = looped.Channels[0];
+        Assert.Equal(new LoopRegion(loop.Value.Start, loop.Value.End), looped.Loop);
+        Assert.True(Math.Abs(channel[^1] - channel[loop.Value.Start - 1]) < 0.01, "the last sample leads into the loop start");
+
+        float[] Section(int id, double seconds)
+        {
+            var random = new Random(id);
+            var notes = Enumerable.Range(0, 32).Select(_ => 110 * Math.Pow(2, random.Next(24) / 12.0)).ToArray();
+            return Enumerable
+                .Range(0, (int)(seconds * rate))
+                .Select(i =>
+                {
+                    var t = i / (double)rate;
+                    var note = notes[(int)(t * 2) % notes.Length];
+                    return (float)(0.25 * Math.Exp(-(t % 0.5) * 4) * Math.Sin(2 * Math.PI * note * t));
+                })
+                .ToArray();
+        }
+    }
+
+    [Fact]
+    public void LoopFinder_GivesUpOnMusicThatNeverRepeats()
+    {
+        var random = new Random(3);
+        var noise = Enumerable.Range(0, 32000 * 40).Select(i => (float)((random.NextDouble() - 0.5) * (0.2 + 0.15 * Math.Sin(i / 9000.0)) * Math.Sin(i / (200.0 + i / 20000.0)))).ToArray();
+
+        Assert.Null(LoopFinder.Find(new AudioBuffer([noise], 32000)));
+    }
+
+    [Theory]
+    [InlineData("SNES Rainbow Road", "rainbow road")]
+    [InlineData("Rainbow Road", "rainbow road")]
+    [InlineData("Wii U Rainbow Road v2", "rainbow road")]
+    [InlineData("3DS Rainbow Road (r3RR)", "rainbow road")]
+    [InlineData("Luigi Circuit / Mario Circuit", "luigi circuit")]
+    [InlineData("N64 Luigi Raceway (Night)", "luigi raceway")]
+    [InlineData("DS", "ds")]
+    public void TrackNames_GroupTheSameCourseAcrossConsoles(string name, string family) => Assert.Equal(family, TrackNames.FamilyKey(name));
 
     [Fact]
     public void Converter_RejectsSilence() =>

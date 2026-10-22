@@ -16,6 +16,22 @@ public enum FinalLapStyle
     Unchanged,
 }
 
+/// <summary>Where a converted song's loop comes from.</summary>
+public enum LoopKind
+{
+    /// <summary>Plays once (jingles and fanfares).</summary>
+    None,
+
+    /// <summary>Loop points stored in the file (WAV smpl chunk, LOOPSTART tags, BRSTM).</summary>
+    FromFile,
+
+    /// <summary>A repeat found in the music itself (<see cref="Dsp.LoopFinder"/>).</summary>
+    Found,
+
+    /// <summary>The ending crossfades into the opening.</summary>
+    Crossfade,
+}
+
 public sealed record ConversionOptions
 {
     /// <summary>Mario Kart Wii streams are 32 kHz.</summary>
@@ -43,6 +59,9 @@ public sealed record ConversionOptions
     /// </summary>
     public byte PulsarVolume { get; init; }
 
+    /// <summary>Search the music for a seamless loop when the file has no loop points (otherwise crossfade).</summary>
+    public bool FindLoop { get; init; } = true;
+
     /// <summary>Length of the crossfade that makes songs without loop points loop smoothly.</summary>
     public double CrossfadeSeconds { get; init; } = 2.5;
 
@@ -59,7 +78,7 @@ public sealed record ConversionReport(
     double AppliedGainDb,
     double LimiterReductionDb,
     TimeSpan Duration,
-    bool UsedSourceLoopPoints,
+    LoopKind Loop,
     int LoopStartSample,
     int SampleCount,
     double OutputLufs,
@@ -156,25 +175,35 @@ public static class MusicConverter
         progress?.Report(0.45);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (options.Loop)
+        var loopKind = !options.Loop ? LoopKind.None
+            : hasSourceLoop ? LoopKind.FromFile
+            : LoopKind.Crossfade;
+        if (options.Loop && audio.Loop == null)
         {
-            if (audio.Loop == null)
+            var beforeLoop = LoudnessMeter.Measure(audio.Channels, audio.SampleRate);
+            // A repeat in the music gives a loop nobody can hear; a crossfade is the fallback.
+            if (options.FindLoop && LoopFinder.Find(audio, cancellationToken: cancellationToken) is { } found)
             {
-                var beforeCrossfade = LoudnessMeter.Measure(audio.Channels, audio.SampleRate);
+                audio = LoopFinder.Apply(audio, found);
+                loopKind = LoopKind.Found;
+            }
+            else
+            {
                 audio = AudioOps.CreateCrossfadeLoop(audio, options.CrossfadeSeconds);
-                // An equal-power crossfade can lift very correlated material (a held note) a little. Undo only
-                // that change: comparing with the target instead would re-add whatever the limiter took off.
-                var looped = LoudnessMeter.Measure(audio.Channels, audio.SampleRate, 0, audio.Loop?.End ?? audio.SampleCount);
-                var correction = beforeCrossfade.IntegratedLufs - looped.IntegratedLufs;
-                if (!looped.IsSilent && !beforeCrossfade.IsSilent && Math.Abs(correction) > 0.2)
-                {
-                    AudioOps.ApplyGain(audio, correction);
-                    gainDb += correction;
-                    limiterReduction = Math.Max(limiterReduction, PeakLimiter.Apply(audio, MusicLoudness.PeakCeilingDb));
-                }
+            }
+
+            // Cutting the song (or an equal-power crossfade over a held note) shifts its loudness a little. Undo only
+            // that change: comparing with the target instead would re-add whatever the limiter took off.
+            var looped = LoudnessMeter.Measure(audio.Channels, audio.SampleRate, 0, audio.Loop?.End ?? audio.SampleCount);
+            var correction = beforeLoop.IntegratedLufs - looped.IntegratedLufs;
+            if (!looped.IsSilent && !beforeLoop.IsSilent && Math.Abs(correction) > 0.2)
+            {
+                AudioOps.ApplyGain(audio, correction);
+                gainDb += correction;
+                limiterReduction = Math.Max(limiterReduction, PeakLimiter.Apply(audio, MusicLoudness.PeakCeilingDb));
             }
         }
-        else
+        else if (!options.Loop)
         {
             AudioOps.FadeOutTail(audio, 0.01);
         }
@@ -213,7 +242,7 @@ public static class MusicConverter
             gainDb,
             limiterReduction,
             TimeSpan.FromSeconds(normalBuffer.SampleCount / (double)normalBuffer.SampleRate),
-            hasSourceLoop,
+            loopKind,
             normalBuffer.Loop?.Start ?? 0,
             normalBuffer.SampleCount,
             output.IntegratedLufs,

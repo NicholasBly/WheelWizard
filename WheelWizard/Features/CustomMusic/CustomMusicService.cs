@@ -39,6 +39,15 @@ public interface ICustomMusicService
     Task<OperationResult> EnableModAsync();
 
     IReadOnlyList<MusicConflict> FindConflicts();
+
+    /// <inheritdoc cref="ICustomMusicInstaller.FindPackMusic"/>
+    IReadOnlyDictionary<string, PackMusic> FindPackMusic();
+
+    /// <summary>
+    /// Extracts the songs in a music pack (.zip) into the library, so they can be matched to tracks and converted.
+    /// Returns the extracted files.
+    /// </summary>
+    Task<OperationResult<IReadOnlyList<string>>> ExtractPackAsync(string zipPath, CancellationToken cancellationToken = default);
 }
 
 public sealed class CustomMusicService(
@@ -61,7 +70,7 @@ public sealed class CustomMusicService(
         {
             var data = library.Load();
             // Leftovers of conversions that were never saved (e.g. the app closed with unsaved changes).
-            library.DeleteUnusedStorage(data.Entries.Select(entry => entry.StorageId));
+            library.DeleteUnused(data.Entries);
             return data;
         }
     }
@@ -151,7 +160,9 @@ public sealed class CustomMusicService(
                 PulsarVolume = result.Report.PulsarVolume,
                 FinalLapStyle = finalLapStyle,
                 DurationSeconds = result.Report.Duration.TotalSeconds,
-                UsedSourceLoopPoints = result.Report.UsedSourceLoopPoints,
+                Loop = result.Report.Loop,
+                LoopStartSeconds = result.Report.LoopStartSample / (double)options.SampleRate,
+                LoopEndSeconds = result.Report.Loop == LoopKind.None ? 0 : result.Report.SampleCount / (double)options.SampleRate,
                 NormalFile = "normal.brstm",
                 FinalLapFile = finalFile,
             };
@@ -212,7 +223,7 @@ public sealed class CustomMusicService(
             if (saveResult.IsFailure)
                 return saveResult;
 
-            library.DeleteUnusedStorage(entries.Select(entry => entry.StorageId));
+            library.DeleteUnused(entries);
         }
 
         return Ok();
@@ -221,7 +232,7 @@ public sealed class CustomMusicService(
     public void DiscardUnsaved()
     {
         lock (_libraryLock)
-            library.DeleteUnusedStorage(library.Load().Entries.Select(entry => entry.StorageId));
+            library.DeleteUnused(library.Load().Entries);
     }
 
     public string? GetCoverPath(CustomMusicEntry entry)
@@ -237,6 +248,11 @@ public sealed class CustomMusicService(
     public Task<OperationResult> EnableModAsync() => installer.EnableAsync();
 
     public IReadOnlyList<MusicConflict> FindConflicts() => installer.FindConflicts();
+
+    public IReadOnlyDictionary<string, PackMusic> FindPackMusic() => installer.FindPackMusic();
+
+    public Task<OperationResult<IReadOnlyList<string>>> ExtractPackAsync(string zipPath, CancellationToken cancellationToken = default) =>
+        Task.Run(() => library.ExtractPack(zipPath, cancellationToken), cancellationToken);
 
     private void DeleteQuietly(string? folder)
     {

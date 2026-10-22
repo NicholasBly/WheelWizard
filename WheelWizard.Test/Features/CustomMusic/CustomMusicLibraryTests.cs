@@ -50,10 +50,38 @@ public class CustomMusicLibraryTests
         var (keep, keepFolder) = _library.CreateStorage();
         var (_, dropFolder) = _library.CreateStorage();
 
-        _library.DeleteUnusedStorage([keep]);
+        _library.DeleteUnused([Entry("game:a", keep)]);
 
         Assert.True(_fs.Directory.Exists(keepFolder));
         Assert.False(_fs.Directory.Exists(dropFolder));
+    }
+
+    [Fact]
+    public void MusicPacksAreExtractedFlat_AndRemovedWhenNoSongUsesThem()
+    {
+        _fs.Directory.CreateDirectory("/downloads");
+        using (var zip = new System.IO.Compression.ZipArchive(_fs.File.Create("/downloads/My Pack.zip"), System.IO.Compression.ZipArchiveMode.Create))
+        {
+            foreach (var name in new[] { "sound/strm/n_Circuit32_n.brstm", "sound/strm/n_Circuit32_f.brstm", "../evil.mp3", "readme.txt", "covers/art.png" })
+            {
+                using var writer = new StreamWriter(zip.CreateEntry(name).Open());
+                writer.Write("data");
+            }
+        }
+
+        var extracted = _library.ExtractPack("/downloads/My Pack.zip");
+
+        Assert.True(extracted.IsSuccess);
+        Assert.Equal(["evil.mp3", "n_Circuit32_f.brstm", "n_Circuit32_n.brstm"], extracted.Value.Select(path => _fs.Path.GetFileName(path)).Order());
+        var folder = _fs.Path.GetDirectoryName(extracted.Value[0])!;
+        Assert.StartsWith("/appdata/CustomMusic/Packs/My Pack-", folder);
+
+        var (storage, storageFolder) = _library.CreateStorage();
+        _library.DeleteUnused([Entry("game:a", storage) with { SourcePath = extracted.Value[0] }]);
+        Assert.True(_fs.Directory.Exists(folder));
+        _library.DeleteUnused([]);
+        Assert.False(_fs.Directory.Exists(folder));
+        Assert.False(_fs.Directory.Exists(storageFolder));
     }
 
     [Theory]

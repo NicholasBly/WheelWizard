@@ -239,6 +239,9 @@
                             </StackPanel>
                             <Border Height="1" Background="{StaticResource Neutral700}" />
                             <TextBlock Classes="TinyText" TextWrapping="Wrap" Text="{loc:T custom_music.formats_help}" />
+                            <components:ActionButton Text="{loc:T custom_music.reset_all.button}" Variant="Ghost" Tone="Danger"
+                                                     IconData="{StaticResource RotateLeft}" HorizontalAlignment="Left"
+                                                     IsEnabled="{Binding HasCustomMusic}" Click="ResetAll_Click" />
                         </StackPanel>
                     </Flyout>
                 </Button.Flyout>
@@ -296,6 +299,7 @@
                             <Border.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="{loc:T custom_music.menu.choose}" Click="ChooseSong_Click" />
+                                    <MenuItem Header="{Binding FamilyMenuText}" Click="UseForFamily_Click" IsVisible="{Binding HasFamily}" />
                                     <MenuItem Header="{loc:T custom_music.menu.play_original}" Click="PlayOriginal_Click" IsVisible="{Binding CanPreviewOriginal}" />
                                     <MenuItem Header="{loc:T custom_music.menu.play_custom}" Click="PlayCustom_Click" IsVisible="{Binding IsCustom}" />
                                     <MenuItem Header="{loc:T custom_music.menu.louder}" Click="Louder_Click" IsVisible="{Binding IsCustom}" />

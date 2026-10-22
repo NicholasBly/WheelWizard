@@ -787,7 +787,7 @@ en:
       one: "1 unsaved change"
       other: "%{count} unsaved changes"
     conflicts: "%{mods} also replaces some of this music and has a higher priority on the Patches page, so it wins for %{amount} file(s)."
-    formats_help: "Drop MP3, FLAC, OGG, WAV, AIFF or BRSTM files onto a track. M4A, AAC, Opus and WMA also work if FFmpeg is installed. Files with loop points (LOOPSTART tags or WAV loops) keep them; other songs get a smooth crossfade loop."
+    formats_help: "Drop MP3, FLAC, OGG, WAV, AIFF or BRSTM files onto a track. M4A, AAC, Opus, WebM and WMA also work if FFmpeg is installed. Files with loop points (LOOPSTART tags or WAV loops) keep them; otherwise the song is searched for a section that repeats so it loops seamlessly, and the ending crossfades into the opening when there is none."
     sort:
       label: "Sort"
       default: "Track order"
@@ -813,6 +813,12 @@ en:
       loudest: "Loudest (+9 dB)"
       at_limit: "%{name} is already as loud as it can get without distorting."
     volume_estimated: "volume estimated"
+    from_pack: "Music from %{pack}"
+    reset_all:
+      button: "Remove all custom music"
+      title: "Remove all custom music?"
+      extra: "All %{amount} tracks go back to their original music when you save."
+      confirm: "Remove all"
     volume_short: "%{amount} dB short (can't get louder)"
     reference:
       retro_rewind: "Retro Rewind's version"
@@ -831,7 +837,9 @@ en:
       loudness: "Original %{original} LUFS (%{reference}) · your song %{source} → %{target} LUFS"
       volume_byte: "Retro Rewind volume %{volume}/127 (original: %{original}/127)"
       volume_limited: "Reached %{amount} compared with the original; any louder would only distort the song"
-      loop_points: "Uses the loop points stored in the file"
+      loop_file: "Loops %{start} → %{end} (loop points from the file)"
+      loop_found: "Loops %{start} → %{end} (seamless loop found in the music)"
+      loop_crossfade: "Loops %{start} → %{end} (the ending crossfades into the opening)"
       volume_offset: "Volume adjusted by %{amount} dB"
       reference_problem: "Volume not matched: %{message}"
     category:
@@ -867,6 +875,7 @@ en:
       choose: "Choose song…"
       play_original: "Play original music"
       play_custom: "Play your song"
+      use_for_family: "Use for all %{amount} %{name} tracks…"
       louder: "Louder (+2 dB)"
       quieter: "Quieter (-2 dB)"
       undo: "Undo change"
@@ -893,6 +902,7 @@ en:
         one: "Jingles and fanfares (1)"
         other: "Jingles and fanfares (%{count})"
       your_song: "Your song"
+      pack: "From %{pack}"
       unavailable: "This computer has no audio player Wheel Wizard can use. On Linux, install PulseAudio, PipeWire, ALSA or FFmpeg."
       no_original: "The original music of this entry isn't a file that can be played."
       needs_disc: "Set your Mario Kart Wii disc in Wheel Wizard's settings to play the original music."
@@ -901,15 +911,13 @@ en:
     empty:
       title: "No matching music"
       body: "Try a different search."
-    drop_hint: "Drop onto a track to replace its music. Files named like game music (e.g. n_Circuit32_n.brstm) are matched automatically."
+    drop_hint: "Drop a song onto a track to replace its music. Music packs (.zip or folder) and files named like game music (n_Circuit32_n.brstm) are matched to their tracks automatically."
     drop_on: "Drop to use this song for %{name}"
     drop_first_only: "Only the first file was used. Drop one song per track."
     drop_on_row:
       title: "Which track should this play on?"
       extra: "Drop the song onto the track you want to replace in the list."
-    matched_files:
-      one: "Matched 1 file by its name"
-      other: "Matched %{count} files by their names"
+    matched_files: "Matched %{matched} of %{total} songs to tracks by their file names"
     leave:
       title: "Discard your music changes?"
       extra: "Songs you added or reset since the last save won't be applied."
@@ -922,3 +930,5 @@ en:
       unreadable: "This file couldn't be read as audio."
       unsupported: "%{extension} files aren't supported. Use MP3, FLAC, OGG, WAV, AIFF or BRSTM."
       load_failed: "Couldn't load the music list: %{message}"
+      pack: "Couldn't open the music pack: %{message}"
+      family: "%{failed} of %{amount} tracks couldn't be converted."

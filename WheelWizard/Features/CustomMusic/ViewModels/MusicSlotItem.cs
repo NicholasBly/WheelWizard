@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Avalonia.Media.Imaging;
+using WheelWizard.CustomMusic.Audio;
 using WheelWizard.CustomMusic.Catalog;
 using WheelWizard.CustomMusic.Library;
 
@@ -36,6 +37,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     private bool _isDropTarget;
     private ItemPreviewState _previewState;
     private double? _targetVolumeOffsetDb;
+    private PackMusic? _pack;
     private bool _canPreviewOriginal;
 
     public MusicSlot Slot { get; private set; } = slot;
@@ -106,6 +108,23 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         }
     }
 
+    /// <summary>Other rows for the same course on other consoles ("SNES Rainbow Road", "Rainbow Road", ...), this one included.</summary>
+    public IReadOnlyList<MusicSlotItem> Family { get; set; } = [];
+
+    /// <summary>The course name shared by <see cref="Family"/> ("Rainbow Road").</summary>
+    public string FamilyName { get; set; } = string.Empty;
+
+    public bool HasFamily => Family.Count > 1;
+
+    public string FamilyMenuText => HasFamily ? t("custom_music.menu.use_for_family", new { amount = Family.Count, name = FamilyName }) : string.Empty;
+
+    /// <summary>The music pack (another enabled patch) that provides this music when no custom song is set.</summary>
+    public PackMusic? Pack
+    {
+        get => _pack;
+        set => Set(ref _pack, value);
+    }
+
     /// <summary>The volume adjustment a running conversion uses (shown while converting), or null.</summary>
     public double? TargetVolumeOffsetDb
     {
@@ -134,7 +153,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     }
 
     public bool IsPreviewing => PreviewState != ItemPreviewState.None;
-    public bool ShowPlayButton => CanPreviewOriginal && !IsPreviewing;
+    public bool ShowPlayButton => (CanPreviewOriginal || Pack != null) && !IsPreviewing;
 
     public bool IsCustom => Current != null;
     public bool IsPending => Saved?.StorageId != Current?.StorageId;
@@ -168,6 +187,8 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                 return entry.ReferenceNote == null ? text : $"{text} · {t("custom_music.volume_estimated")}";
             }
 
+            if (Pack != null)
+                return t("custom_music.from_pack", new { pack = Pack.ModTitle });
             return Slot.Detail ?? Slot.FileNames.FirstOrDefault() ?? string.Empty;
         }
     }
@@ -212,8 +233,15 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
                 }
                 if (entry.ReferenceNote != null)
                     lines.Add(t("custom_music.details.reference_problem", new { message = entry.ReferenceNote }));
-                if (entry.UsedSourceLoopPoints)
-                    lines.Add(t("custom_music.details.loop_points"));
+                var loop = entry.Loop switch
+                {
+                    LoopKind.FromFile => "custom_music.details.loop_file",
+                    LoopKind.Found => "custom_music.details.loop_found",
+                    LoopKind.Crossfade => "custom_music.details.loop_crossfade",
+                    _ => null,
+                };
+                if (loop != null)
+                    lines.Add(t(loop, new { start = FormatTime(entry.LoopStartSeconds), end = FormatTime(entry.LoopEndSeconds) }));
             }
 
             return string.Join(Environment.NewLine, lines);
@@ -221,6 +249,8 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
     }
 
     public string SortName => Name;
+
+    private static string FormatTime(double seconds) => TimeSpan.FromSeconds(seconds).ToString(seconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss");
 
     private static string FormatDb(double decibels) => decibels.ToString("+0.#;-0.#", System.Globalization.CultureInfo.CurrentCulture) + " dB";
 
@@ -261,6 +291,7 @@ public sealed class MusicSlotItem(MusicSlot slot) : INotifyPropertyChanged
         nameof(Cover),
         nameof(IsDropTarget),
         nameof(TargetVolumeOffsetDb),
+        nameof(Pack),
         nameof(PreviewState),
         nameof(CanPreviewOriginal),
         nameof(IsPreviewing),

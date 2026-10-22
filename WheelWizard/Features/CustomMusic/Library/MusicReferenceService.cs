@@ -80,7 +80,7 @@ public sealed class MusicReferenceService(
                         logger.LogWarning("Could not read {File} from the game disc: {Message}", gameFile, bytes.Error.Message);
                         problem ??= bytes.Error.Message;
                     }
-                    else if (Measure(bytes.Value, slot.PlaysAllTracks) is { } result)
+                    else if (await Task.Run(() => Measure(bytes.Value, slot.PlaysAllTracks), cancellationToken) is { } result)
                     {
                         return Remember(cache, key, result, MusicReferenceSource.GameDisc);
                     }
@@ -105,14 +105,16 @@ public sealed class MusicReferenceService(
     /// </summary>
     private static double EstimateFrom(Dictionary<string, CachedReference> cache)
     {
-        // Entries from older versions measured differently (the volume byte folded in, every track counted); ignore them.
         var measured = cache
-            .Where(pair => pair.Key.StartsWith("v3|", StringComparison.Ordinal) && pair.Value.Source != MusicReferenceSource.Estimate)
+            .Where(pair => pair.Value.Source != MusicReferenceSource.Estimate)
             .Select(pair => pair.Value.Lufs)
             .Order()
             .ToList();
         return measured.Count >= 3 ? measured[measured.Count / 2] : MusicLoudness.DefaultTargetLufs;
     }
+
+    /// <summary>Prefix of every cache key. Changing how music is measured means changing it, so stale results are ignored.</summary>
+    private const string CacheVersion = "v1|";
 
     /// <summary>The same file measures differently depending on which of its tracks are heard, so that is part of the key.</summary>
     private static string Tracks(MusicSlot slot) => slot.PlaysAllTracks ? "|all-tracks" : "|first-track";
@@ -169,7 +171,13 @@ public sealed class MusicReferenceService(
         try
         {
             if (fileSystem.File.Exists(CachePath))
-                _cache = JsonSerializer.Deserialize<Dictionary<string, CachedReference>>(fileSystem.File.ReadAllText(CachePath));
+            {
+                // Results measured another way (another CacheVersion) are dropped and measured again.
+                _cache = JsonSerializer
+                    .Deserialize<Dictionary<string, CachedReference>>(fileSystem.File.ReadAllText(CachePath))
+                    ?.Where(pair => pair.Key.StartsWith(CacheVersion, StringComparison.Ordinal))
+                    .ToDictionary();
+            }
         }
         catch (Exception exception) when (exception is JsonException or IOException)
         {
@@ -183,6 +191,6 @@ public sealed class MusicReferenceService(
     private string Identity(string kind, string containerPath, string item)
     {
         var info = fileSystem.FileInfo.New(containerPath);
-        return $"v3|{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
+        return $"{CacheVersion}{kind}|{containerPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{item}".ToLowerInvariant();
     }
 }

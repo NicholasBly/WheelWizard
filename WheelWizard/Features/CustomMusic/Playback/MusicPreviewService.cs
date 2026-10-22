@@ -16,6 +16,9 @@ public interface IMusicPreviewService
     /// <summary>The music that plays in <paramref name="slot"/> without any custom song: Retro Rewind's file, or the file on the game disc.</summary>
     Task<OperationResult<PreviewClip>> LoadOriginalAsync(MusicSlot slot, CancellationToken cancellationToken = default);
 
+    /// <summary>A BRSTM file on disk, such as a music pack's version of a track.</summary>
+    Task<OperationResult<PreviewClip>> LoadFileAsync(string path, CancellationToken cancellationToken = default);
+
     /// <summary>The converted version of a song, exactly as it will be installed.</summary>
     Task<OperationResult<PreviewClip>> LoadCustomAsync(CustomMusicEntry entry, CancellationToken cancellationToken = default);
 }
@@ -41,6 +44,18 @@ public sealed class MusicPreviewService(
 
     public Task<OperationResult<PreviewClip>> LoadCustomAsync(CustomMusicEntry entry, CancellationToken cancellationToken = default) =>
         Task.Run(() => LoadCustom(entry), cancellationToken);
+
+    public Task<OperationResult<PreviewClip>> LoadFileAsync(string path, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                if (!fileSystem.File.Exists(path))
+                    return (OperationResult<PreviewClip>)new OperationError { Message = t("custom_music.preview.song_missing") };
+                var info = fileSystem.FileInfo.New(path);
+                return Decode($"file|{path}|{info.Length}|{info.LastWriteTimeUtc.Ticks}", () => fileSystem.File.ReadAllBytes(path));
+            },
+            cancellationToken
+        );
 
     private OperationResult<PreviewClip> LoadOriginal(MusicSlot slot)
     {
