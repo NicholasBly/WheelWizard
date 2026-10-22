@@ -1,0 +1,135 @@
+name: Custom Music test build
+
+# Builds a ready-to-run WheelWizard.exe from the music branch (this fork only, not part of the pull request) so it can be tested without installing the .NET SDK.
+# Download it from the run's "Artifacts" section on the Actions tab.
+
+on:
+  push:
+    branches:
+      - music-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    name: Build WheelWizard.exe (Windows x64)
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore WheelWizard.sln
+
+      - name: Build solution
+        run: |
+          set -o pipefail
+          dotnet build WheelWizard.sln --configuration Release --no-restore 2>&1 | tee build.log
+
+      # GitHub shows at most 10 warnings per step, so list them all (once each) in the run summary,
+      # and say how many come from the custom music code.
+      - name: Summarize build warnings
+        if: always()
+        run: |
+          [ -f build.log ] || exit 0
+          grep -E ": warning [A-Za-z]+[0-9]+:" build.log \
+            | sed -E 's/ \[[^]]*\]\r?$//; s#\\#/#g; s#^.*/WheelWizard/(WheelWizard[^/]*/)#\1#' \
+            | sort -u > warnings.txt || true
+          total=$(wc -l < warnings.txt | tr -d ' ')
+          custom=$(grep -c "CustomMusic" warnings.txt || true)
+          {
+            echo "### Build warnings: $total (custom music: $custom)"
+            echo
+            echo '```'
+            cat warnings.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          message="$total warnings, $custom in custom music code"
+          if [ "$custom" -gt 0 ]; then
+            message="$message%0A$(grep "CustomMusic" warnings.txt | head -100 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          fi
+          echo "::notice title=Build warnings::${message}"
+
+      # The build step above already reported every warning; repeating them here only doubles the list.
+      - name: Publish Windows x64
+        run: >
+          dotnet publish WheelWizard/WheelWizard.csproj
+          -consoleLoggerParameters:ErrorsOnly
+          --runtime win-x64
+          --configuration Release
+          --output publish/win-x64
+          --self-contained true
+          -p:UseAppHost=true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+
+      # Uploaded as the plain .exe (no zip to extract).
+      - name: Upload WheelWizard.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: publish/win-x64/WheelWizard.exe
+          archive: false
+          retention-days: 30
+
+      # Runs after the upload so a failing test elsewhere never blocks getting the exe to try out.
+      - name: Run tests
+        run: |
+          set -o pipefail
+          dotnet test WheelWizard.sln --configuration Release --no-build --verbosity normal 2>&1 | tee test.log
+
+      # Failing tests show up as annotations on the run, so there is no need to open the full log.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          [ -f test.log ] || exit 0
+          # Failed tests with their messages; if there are none (a crashed test host, a build error), the end of the log.
+          details=$(grep -E -A8 "^\s+Failed " test.log | head -400 || true)
+          [ -n "$details" ] || details=$(grep -v "^\s*$" test.log | tail -60)
+          message=$(printf '%s' "$details" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+          echo "::error title=Failing tests::${message}"
+
+  # The upstream pull request checks also build and test on Linux.
+  linux-tests:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build and test
+        run: |
+          set -o pipefail
+          dotnet build WheelWizard.sln --configuration Release 2>&1 | tail -5
+          dotnet test WheelWizard.sln --configuration Release --no-build --verbosity normal 2>&1 | tee test.log
+
+      - name: Report failing tests
+        if: failure()
+        run: |
+          [ -f test.log ] || exit 0
+          details=$(grep -E -A8 "^\s+Failed " test.log | head -400 || true)
+          [ -n "$details" ] || details=$(grep -v "^\s*$" test.log | tail -60)
+          message=$(printf '%s' "$details" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+          echo "::error title=Failing tests (Linux)::${message}"
