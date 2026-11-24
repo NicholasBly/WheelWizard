@@ -183,6 +183,47 @@ en:
       search_placeholder: Search...
     input:
       invalid_number: Enter a number
+  custom_music:
+    choose: Choose music
+    converting: Converting...
+    error:
+      missing: The song file could not be found.
+      no_game: Set your Mario Kart Wii game file in Wheel Wizard's settings to play the original music.
+      no_original: The original music here isn't a file Wheel Wizard can play.
+      play: 'Could not play the music: %{message}'
+      too_long: Songs can be at most 10 minutes long.
+      unreadable: This song could not be read. The file may be damaged.
+      unsupported: This file type is not supported. Use an MP3, OGG, FLAC, WAV, AIFF or BRSTM file.
+      write: 'Could not save the custom music: %{message}'
+    file_type: Music files
+    final_lap:
+      faster: Faster (Retro Rewind style)
+      faster_same_pitch: Faster, same pitch
+      help: Used for songs you add from now on.
+      label: Final lap music
+      unchanged: Same as laps 1 and 2
+    help: Choose or drop an MP3, OGG, FLAC, WAV, AIFF or BRSTM file onto a track. Songs loop where the music repeats, or at their own loop points. Changes are saved right away in the Custom Music patch.
+    match_volume:
+      help: New songs are made as loud as the music they replace, measured from Retro Rewind's files or your game file.
+      label: Match the volume of the original music
+    open_folder: Open the music folder
+    pick_title: Choose music for %{name}
+    play: Play the music
+    reset: Use the original music
+    search: Search tracks and menus
+    settings: Settings
+    sort:
+      changed_first: Changed first
+      label: Sort
+      name: A to Z
+      track_order: Track order
+    stop: Stop
+    tab:
+      battle: Battle
+      menus: Menus
+      races: Races
+    title: Custom Music
+    unknown_song: Custom music
   empty_content:
     no_friends: You can add friends in-game
     no_friends_title: No friends yet!
