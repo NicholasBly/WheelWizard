@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using WheelWizard.CustomMusic.Views;
 using WheelWizard.Features.Patches;
 using WheelWizard.Models.Mods;
 using WheelWizard.Mods;
@@ -253,6 +254,13 @@ public partial class ModsPage : UserControl, INotifyPropertyChanged
     private void BrowseMod_Click(object sender, RoutedEventArgs e)
     {
         _navigation.NavigateTo<ModBrowserPage>();
+    }
+
+    private void CustomMusic_Click(object sender, RoutedEventArgs e)
+    {
+        var popup = Popups.Create<CustomMusicWindow>();
+        popup.SetModalOwner(this);
+        popup.Show();
     }
 
     private async Task ReloadModsAndShowErrorsAsync()

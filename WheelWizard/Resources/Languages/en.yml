@@ -775,3 +775,18 @@ en:
   mod_library:
     priority: "Load priority"
     reorder: "Drag to reorder"
+  custom_music:
+    choose: Choose song
+    converting: Converting...
+    error:
+      missing: The song file could not be found.
+      too_long: Songs can be at most 10 minutes long.
+      unreadable: This song could not be read. The file may be damaged.
+      unsupported: This file type is not supported. Use an MP3, OGG, WAV, AIFF or BRSTM file.
+      write: 'Could not save the custom music: %{message}'
+    file_type: Songs
+    help: MP3, OGG, WAV, AIFF and BRSTM files work. Songs loop from start to end and play 6% faster on the final lap, like Retro Rewind's own music. Changes are saved right away in the Custom Music patch.
+    pick_title: Choose a song for %{name}
+    reset: Use the original music
+    search: Search tracks and menus
+    title: Custom Music

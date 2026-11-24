@@ -1,0 +1,88 @@
+<dialogBase:ModalContent xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:loc="clr-namespace:WheelWizard.Localization"
+                         xmlns:components="clr-namespace:WheelWizard.Views.Components"
+                         xmlns:dialogBase="clr-namespace:WheelWizard.Views.Dialogs.Base"
+                         xmlns:music="clr-namespace:WheelWizard.CustomMusic.Views"
+                         x:Class="WheelWizard.CustomMusic.Views.CustomMusicWindow">
+    <dialogBase:ModalContent.Styles>
+        <Style Selector="Border.MusicRow">
+            <Setter Property="Background" Value="{StaticResource Neutral900}" />
+            <Setter Property="BorderBrush" Value="{StaticResource Neutral900}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Margin" Value="0,3" />
+            <Setter Property="Padding" Value="10,0,6,0" />
+            <Setter Property="Height" Value="54" />
+        </Style>
+        <!-- Rows with a custom song get the brand tint. -->
+        <Style Selector="Border.MusicRow.Custom">
+            <Setter Property="Background" Value="{StaticResource Brand950}" />
+            <Setter Property="BorderBrush" Value="{StaticResource Brand800}" />
+        </Style>
+        <Style Selector="TextBlock.RowTitle">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource Neutral100}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="TextBlock.RowSubtitle">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource Neutral400}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Border.MusicRow.Custom TextBlock.RowSubtitle">
+            <Setter Property="Foreground" Value="{StaticResource Brand300}" />
+        </Style>
+        <Style Selector="TextBlock.RowSubtitle.Failed, Border.MusicRow.Custom TextBlock.RowSubtitle.Failed">
+            <Setter Property="Foreground" Value="{StaticResource Danger300}" />
+        </Style>
+    </dialogBase:ModalContent.Styles>
+
+    <Grid Width="560" MinHeight="560" MaxHeight="700" RowDefinitions="Auto,Auto,*,Auto">
+        <components:ModalHeading Margin="0,0,0,12">
+            <TextBlock Classes="TitleText" Text="{loc:T custom_music.title}" />
+        </components:ModalHeading>
+
+        <components:InputField Grid.Row="1" x:Name="SearchInput" Placeholder="{loc:T custom_music.search}"
+                               IconData="{StaticResource Search}" Height="36" TextChanged="Search_TextChanged" />
+
+        <ListBox Grid.Row="2" x:Name="MusicList" Margin="0,10,0,0" Padding="0" Focusable="False"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <!-- Right margin keeps the buttons clear of the scroll bar. -->
+                    <VirtualizingStackPanel Margin="0,0,14,0" />
+                </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="music:CustomMusicRow">
+                    <Border Classes="MusicRow" Classes.Custom="{Binding IsCustom}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <StackPanel VerticalAlignment="Center" Spacing="2">
+                                <TextBlock Text="{Binding Name}" Classes="RowTitle" />
+                                <TextBlock Text="{Binding Subtitle}" Classes="RowSubtitle" Classes.Failed="{Binding HasError}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <components:ActionButton IconData="{StaticResource RotateLeft}" Variant="Ghost" Tone="Secondary"
+                                                         IsCircular="True" Size="Compact" VerticalAlignment="Center"
+                                                         IsVisible="{Binding IsCustom}" IsEnabled="{Binding !IsBusy}"
+                                                         ToolTip.Tip="{loc:T custom_music.reset}"
+                                                         AutomationProperties.Name="{loc:T custom_music.reset}"
+                                                         Click="Reset_Click" />
+                                <components:ActionButton Text="{loc:T custom_music.choose}" IconData="{StaticResource FileImport}"
+                                                         Tone="Secondary" Size="Compact" VerticalAlignment="Center"
+                                                         IsLoading="{Binding IsBusy}" Click="Choose_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <components:Spinner Grid.Row="2" x:Name="LoadingSpinner" Width="28" Height="28"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+        <TextBlock Grid.Row="3" Classes="TinyText" TextWrapping="Wrap" Margin="0,10,0,0" Text="{loc:T custom_music.help}" />
+    </Grid>
+</dialogBase:ModalContent>

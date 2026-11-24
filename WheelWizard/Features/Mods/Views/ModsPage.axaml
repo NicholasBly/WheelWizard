@@ -56,7 +56,7 @@
         <Border Grid.Row="1" Background="{StaticResource BackgroundLineColor}" Height="1"
                 HorizontalAlignment="Stretch" VerticalAlignment="Bottom" />
 
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="3,0,3,12" VerticalAlignment="Bottom">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="3,0,3,12" VerticalAlignment="Bottom">
             <StackPanel Spacing="6">
                 <components:ToggleCheckBox Variant="Switch" x:Name="EnableAllCheckbox" Content="{loc:T action.enable_all}"
                                            HorizontalAlignment="Left" IsVisible="{Binding HasMods}" Click="ToggleButton_OnIsCheckedChanged" />
@@ -65,7 +65,9 @@
                     <components:StatusBadge Text="0" x:Name="ListItemCount" VerticalAlignment="Center" />
                 </StackPanel>
             </StackPanel>
-            <components:SplitButton Grid.Column="1" Text="{loc:T action.browse}" IconData="{StaticResource Search}"
+            <components:ActionButton Grid.Column="1" Text="{loc:T custom_music.title}" IconData="{StaticResource MusicNote}"
+                                     Tone="Secondary" Height="36" VerticalAlignment="Bottom" Click="CustomMusic_Click" />
+            <components:SplitButton Grid.Column="2" Text="{loc:T action.browse}" IconData="{StaticResource Search}"
                                     Tone="Secondary" Height="36" VerticalAlignment="Bottom" Click="BrowseMod_Click">
                 <components:SplitButton.Flyout>
                     <MenuFlyout>
