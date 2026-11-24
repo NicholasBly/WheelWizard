@@ -18,7 +18,8 @@ public interface IGitHubSingletonService
 
 public class GitHubSingletonService(IApiCaller<IGitHubApi> apiService) : IGitHubSingletonService
 {
-    public async Task<OperationResult<List<GithubRelease>>> GetReleasesAsync() => await GetReleasesAsync("TeamWheelWizard", "WheelWizard");
+    // Custom Music builds update from this fork, which only publishes builds that passed its checks.
+    public async Task<OperationResult<List<GithubRelease>>> GetReleasesAsync() => await GetReleasesAsync("NicholasBly", "WheelWizard");
 
     public async Task<OperationResult<List<GithubRelease>>> GetReleasesAsync(string owner, string repository, int count = 3)
     {
