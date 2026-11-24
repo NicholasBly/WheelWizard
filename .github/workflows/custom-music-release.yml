@@ -1,0 +1,154 @@
+name: Custom Music release
+
+# Keeps a Custom Music build of Wheel Wizard in step with the official releases (this fork only).
+# Once a day it puts Custom Music on top of the newest TeamWheelWizard/WheelWizard release: the custom-music branch,
+# or, when that no longer applies, the pull request branch (music) plus the updater change from custom-music.
+# The result is built and every test is run; only then is WheelWizard.exe published here, which Custom Music builds
+# offer as their update. Once an official release has Custom Music itself, that official build is published instead,
+# which moves Wheel Wizard back to the official updates. Any failure stops the run before anything is published.
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: custom-music-release
+
+jobs:
+  release:
+    name: Rebase, test and publish
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: TeamWheelWizard/WheelWizard
+      PATCH_BRANCH: custom-music
+      PR_BRANCH: music
+
+    steps:
+      - name: Find the newest official release
+        id: upstream
+        run: |
+          tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          release="v${tag#v}-music"
+          patch=$(gh api "repos/$GITHUB_REPOSITORY/branches/$PATCH_BRANCH" --jq .commit.sha)
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/branches/$PR_BRANCH" --jq .commit.sha 2>/dev/null || true)
+          source="$PATCH_BRANCH $patch, $PR_BRANCH ${pr:-none}"
+          {
+            echo "tag=$tag"
+            echo "release=$release"
+            echo "source=$source"
+          } >> "$GITHUB_OUTPUT"
+          # The release notes name the branches it was built from; rebuild only when one of them changed.
+          published=$(gh release view "$release" --repo "$GITHUB_REPOSITORY" --json body,assets --jq '.body, .assets[].name' 2>/dev/null || true)
+          if gh api "repos/$UPSTREAM/contents/WheelWizard/Features/CustomMusic?ref=$tag" --silent 2>/dev/null; then
+            echo "$tag has Custom Music built in."
+            echo "official=true" >> "$GITHUB_OUTPUT"
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          elif grep -qF "$source" <<< "$published" && grep -qx WheelWizard.exe <<< "$published"; then
+            echo "$release is already published from these branches."
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the official release, which has Custom Music
+        if: steps.upstream.outputs.official == 'true'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          official="v${TAG#v}-official"
+          if gh release view "$official" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then exit 0; fi
+          gh release download "$TAG" --repo "$UPSTREAM" --pattern '*.exe' --dir official
+          gh release create "$official" official/*.exe --repo "$GITHUB_REPOSITORY" --target "$PATCH_BRANCH" \
+            --title "Wheel Wizard ${TAG#v} (official, with Custom Music)" \
+            --notes "The official Wheel Wizard $TAG, which has Custom Music built in. Updating to it moves Wheel Wizard back to the official releases."
+
+      - name: Check out the custom-music branch
+        if: steps.upstream.outputs.done != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Put Custom Music on ${{ steps.upstream.outputs.tag }}
+        id: patch
+        if: steps.upstream.outputs.done != 'true'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags "https://github.com/$UPSTREAM" "+refs/tags/$TAG:refs/tags/$TAG" "+refs/heads/main:refs/remotes/upstream/main"
+          if git rebase "$TAG"; then
+            from="$PATCH_BRANCH"
+          else
+            git rebase --abort
+            # The pull request branch follows the official code, so it applies to releases made after custom-music.
+            git checkout -q -B build "origin/$PR_BRANCH" && git cherry-pick "origin/$PATCH_BRANCH" && git rebase --onto "$TAG" upstream/main \
+              || { echo "::error::Neither $PATCH_BRANCH nor $PR_BRANCH applies cleanly to $TAG"; exit 1; }
+            from="$PR_BRANCH"
+          fi
+          git log --oneline "$TAG..HEAD"
+          echo "from=$from ($(git rev-parse --short HEAD))" >> "$GITHUB_OUTPUT"
+          [ -f WheelWizard/Features/CustomMusic/CustomMusicService.cs ] || { echo "::error::Custom Music is missing after the rebase"; exit 1; }
+          grep -q "GetReleasesAsync(\"$GITHUB_REPOSITORY_OWNER\", \"WheelWizard\")" WheelWizard/Features/GitHub/GitHubSingletonService.cs \
+            || { echo "::error::The updater no longer reads this fork's releases"; exit 1; }
+          if grep -rn '"TeamWheelWizard"' WheelWizard/Features/AutoUpdating WheelWizard/Features/GitHub; then
+            echo "::error::Updater code still points at the official releases"; exit 1
+          fi
+          # A release whose version differs from its tag would offer the same update forever.
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' WheelWizard/WheelWizard.csproj | tr -d '\r')
+          [ "$version" = "${TAG#v}" ] || { echo "::error::WheelWizard.csproj says $version but the release is $TAG"; exit 1; }
+          major=$(sed -n 's/.*"version": *"\([0-9]*\)\..*/\1/p' global.json | tr -d '\r')
+          [ -n "$major" ] || { echo "::error::Could not read the .NET SDK version from global.json"; exit 1; }
+          echo "dotnet=$major.0.x" >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET
+        if: steps.upstream.outputs.done != 'true'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ steps.patch.outputs.dotnet }}
+
+      - name: Build and run every test
+        if: steps.upstream.outputs.done != 'true'
+        run: |
+          dotnet build WheelWizard.sln --configuration Release
+          dotnet test WheelWizard.sln --configuration Release --no-build
+
+      # Same publish settings as the official release workflow.
+      - name: Publish WheelWizard.exe
+        if: steps.upstream.outputs.done != 'true'
+        run: >
+          dotnet publish WheelWizard/WheelWizard.csproj
+          --runtime win-x64
+          --configuration Release
+          --output publish
+          --self-contained true
+          -p:UseAppHost=true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+
+      - name: Publish the release
+        if: steps.upstream.outputs.done != 'true'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+          RELEASE: ${{ steps.upstream.outputs.release }}
+          FROM: ${{ steps.patch.outputs.from }}
+          SOURCE: ${{ steps.upstream.outputs.source }}
+        run: |
+          notes="Official Wheel Wizard $TAG with Custom Music: $FROM rebased onto $TAG, built and fully tested by the Custom Music release workflow. Built from $SOURCE."
+          if gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$RELEASE" publish/WheelWizard.exe --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE" --repo "$GITHUB_REPOSITORY" --notes "$notes"
+          else
+            gh release create "$RELEASE" publish/WheelWizard.exe --repo "$GITHUB_REPOSITORY" --target "$PATCH_BRANCH" \
+              --title "Wheel Wizard ${TAG#v} + Custom Music" --notes "$notes"
+          fi
