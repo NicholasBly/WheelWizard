@@ -1,11 +1,6 @@
 name: Custom Music release
 
-# Keeps a Custom Music build of Wheel Wizard in step with the official releases (this fork only).
-# Once a day it puts Custom Music on top of the newest TeamWheelWizard/WheelWizard release: the custom-music branch,
-# or, when that no longer applies, the pull request branch (music) plus the updater change from custom-music.
-# The result is built and every test is run; only then is WheelWizard.exe published here, which Custom Music builds
-# offer as their update. Once an official release has Custom Music itself, that official build is published instead,
-# which moves Wheel Wizard back to the official updates. Any failure stops the run before anything is published.
+# Fork only: once a day, puts Custom Music on the newest official release and publishes the build here only if every check and test passes.
 
 on:
   schedule:
@@ -30,7 +25,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM: TeamWheelWizard/WheelWizard
       PATCH_BRANCH: custom-music
-      PR_BRANCH: music
+      NEXT_BRANCH: custom-music-next
 
     steps:
       - name: Find the newest official release
@@ -39,8 +34,8 @@ jobs:
           tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
           release="v${tag#v}-music"
           patch=$(gh api "repos/$GITHUB_REPOSITORY/branches/$PATCH_BRANCH" --jq .commit.sha)
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/branches/$PR_BRANCH" --jq .commit.sha 2>/dev/null || true)
-          source="$PATCH_BRANCH $patch, $PR_BRANCH ${pr:-none}"
+          next=$(gh api "repos/$GITHUB_REPOSITORY/branches/$NEXT_BRANCH" --jq .commit.sha 2>/dev/null || true)
+          source="$PATCH_BRANCH $patch, $NEXT_BRANCH ${next:-none}"
           {
             echo "tag=$tag"
             echo "release=$release"
@@ -90,10 +85,10 @@ jobs:
             from="$PATCH_BRANCH"
           else
             git rebase --abort
-            # The pull request branch follows the official code, so it applies to releases made after custom-music.
-            git checkout -q -B build "origin/$PR_BRANCH" && git cherry-pick "origin/$PATCH_BRANCH" && git rebase --onto "$TAG" upstream/main \
-              || { echo "::error::Neither $PATCH_BRANCH nor $PR_BRANCH applies cleanly to $TAG"; exit 1; }
-            from="$PR_BRANCH"
+            # custom-music-next follows the official main branch, so it applies to releases made after custom-music.
+            git checkout -q -B build "origin/$NEXT_BRANCH" && git cherry-pick "origin/$PATCH_BRANCH" && git rebase --onto "$TAG" upstream/main \
+              || { echo "::error::Neither $PATCH_BRANCH nor $NEXT_BRANCH applies cleanly to $TAG"; exit 1; }
+            from="$NEXT_BRANCH"
           fi
           git log --oneline "$TAG..HEAD"
           echo "from=$from ($(git rev-parse --short HEAD))" >> "$GITHUB_OUTPUT"
